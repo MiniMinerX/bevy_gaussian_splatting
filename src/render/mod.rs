@@ -861,19 +861,8 @@ pub fn queue_gaussian_view_bind_groups(
     )>,
     globals_buffer: Res<GlobalsBuffer>,
 ) {
-    if let (
-        Some(view_binding),
-        Some(globals),
-    ) = (
-        view_uniforms.uniforms.binding(),
-        globals_buffer.buffer.binding(),
-    ) {
-        for (
-            entity,
-            _extracted_view,
-            _render_phase,
-        ) in &views
-        {
+    if let (Some(view_binding), Some(globals)) = (view_uniforms.uniforms.binding(), globals_buffer.buffer.binding()) {
+        for (entity, _extracted_view, _render_phase) in views.iter() {
             let layout = &gaussian_cloud_pipeline.view_layout;
 
             let entries = vec![
