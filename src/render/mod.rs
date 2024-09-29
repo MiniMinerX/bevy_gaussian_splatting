@@ -811,7 +811,7 @@ fn queue_gaussian_bind_group(
         let num_cameras = cams.iter().count();
         let entry_size = std::mem::size_of::<SortEntry>() as u64;
         let entries_per_camera = cloud.count as u64;
-        let buffer_size = entry_size * entries_per_camera;
+        let buffer_size = entry_size * entries_per_camera * 3;
 
         #[cfg(feature = "buffer_storage")]
         let sorted_bind_group = render_device.create_bind_group(
