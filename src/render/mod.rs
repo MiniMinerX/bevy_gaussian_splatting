@@ -162,9 +162,7 @@ impl Plugin for RenderPipelinePlugin {
                     Render,
                     (
                         queue_gaussian_bind_group.in_set(RenderSet::Queue),
-                        queue_gaussian_view_bind_groups
-                            .after(bevy::render::view::prepare_view_uniforms)
-                            .in_set(RenderSet::Queue),
+                        queue_gaussian_view_bind_groups.in_set(RenderSet::Queue),
                         queue_gaussians.in_set(RenderSet::Queue),
                     ),
                 );
@@ -873,7 +871,7 @@ pub fn queue_gaussian_view_bind_groups(
         Some(view_binding),
         Some(globals),
     ) = (
-        view_uniforms.uniforms.binding(),
+        view_uniforms.uniforms.binding() ,
         globals_buffer.buffer.binding(),
     ) {
         for (

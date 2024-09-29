@@ -72,12 +72,41 @@ fn setup_gaussian_cloud(
         cloud = gaussian_assets.add(GaussianCloud::test_model());
     }
 
+
     commands.spawn((
         GaussianSplattingBundle {
-            cloud,
+            cloud: cloud.clone(),
             ..default()
         },
         Name::new("gaussian_cloud"),
+    ));
+
+    commands.spawn((
+        GaussianSplattingBundle {
+            cloud: cloud.clone(),
+            ..default()
+        },
+        Name::new("gaussian_cloud_2"),
+    ));
+
+    let cloud_2 = asset_server.load("scenes/icecream.ply");
+
+    commands.spawn((
+        GaussianSplattingBundle {
+            cloud: cloud_2.clone(),
+            ..default()
+        },
+        Name::new("gaussian_cloud_3"),
+    ));
+
+    let cloud_3 = asset_server.load("scenes/icecream.ply");
+
+    commands.spawn((
+        GaussianSplattingBundle {
+            cloud: cloud_3.clone(),
+            ..default()
+        },
+        Name::new("gaussian_cloud_3"),
     ));
 
     commands.spawn((
