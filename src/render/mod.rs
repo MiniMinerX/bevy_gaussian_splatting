@@ -73,9 +73,7 @@ use crate::{
     },
     morph::MorphPlugin,
     sort::{
-        GpuSortedEntry,
-        SortPlugin,
-        SortedEntries,
+        GpuSortedEntry, SortEntry, SortPlugin, SortedEntries
     },
 };
 
@@ -748,6 +746,7 @@ fn queue_gaussian_bind_group(
     gaussian_cloud_res: Res<RenderAssets<GpuGaussianCloud>>,
     sorted_entries_res: Res<RenderAssets<GpuSortedEntry>>,
     gaussian_clouds: Query<GpuGaussianBundleQuery>,
+    cams: Query<&Camera3d>,
 
     #[cfg(feature = "buffer_texture")]
     gpu_images: Res<RenderAssets<bevy::render::texture::GpuImage>>,
@@ -809,6 +808,13 @@ fn queue_gaussian_bind_group(
         #[cfg(feature = "buffer_texture")]
         let cloud_bind_group = texture_buffers.bind_group.clone();
 
+        let num_cameras = cams.iter().count();
+        let entry_size = std::mem::size_of::<SortEntry>() as u64;
+        let entries_per_camera = cloud.count as u64;
+        let unaligned_camera_size = entry_size * entries_per_camera;
+        let camera_stride = ((unaligned_camera_size + 255) / 256) * 256;
+        let buffer_size = camera_stride * num_cameras as u64;
+
         #[cfg(feature = "buffer_storage")]
         let sorted_bind_group = render_device.create_bind_group(
             "render_sorted_bind_group",
@@ -819,7 +825,7 @@ fn queue_gaussian_bind_group(
                     resource: BindingResource::Buffer(BufferBinding {
                         buffer: &sorted_entries.sorted_entry_buffer,
                         offset: 0,
-                        size: BufferSize::new((cloud.count * std::mem::size_of::<(u32, u32)>()) as u64),
+                        size: BufferSize::new(buffer_size),
                     }),
                 },
             ],
