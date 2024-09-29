@@ -162,7 +162,9 @@ impl Plugin for RenderPipelinePlugin {
                     Render,
                     (
                         queue_gaussian_bind_group.in_set(RenderSet::Queue),
-                        queue_gaussian_view_bind_groups.in_set(RenderSet::Queue),
+                        queue_gaussian_view_bind_groups
+                            .after(bevy::render::view::prepare_view_uniforms)
+                            .in_set(RenderSet::Queue),
                         queue_gaussians.in_set(RenderSet::Queue),
                     ),
                 );
@@ -813,6 +815,7 @@ fn queue_gaussian_bind_group(
         let entries_per_camera = cloud.count as u64;
         let buffer_size = entry_size * entries_per_camera;
 
+
         #[cfg(feature = "buffer_storage")]
         let sorted_bind_group = render_device.create_bind_group(
             "render_sorted_bind_group",
@@ -883,14 +886,6 @@ pub fn queue_gaussian_view_bind_groups(
                 BindGroupEntry {
                     binding: 0,
                     resource: view_binding.clone(),
-                },
-                BindGroupEntry {
-                    binding: 0,
-                    resource: view_binding.clone(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: globals.clone(),
                 },
                 BindGroupEntry {
                     binding: 1,
