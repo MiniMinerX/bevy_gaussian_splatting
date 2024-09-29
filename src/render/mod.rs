@@ -765,7 +765,8 @@ fn queue_gaussian_bind_group(
                 resource: BindingResource::Buffer(BufferBinding {
                     buffer: model,
                     offset: 0,
-                    size: GaussianCloudUniform::min_size().into(),
+                    //size: GaussianCloudUniform::min_size().into(),
+                    size: None,
                 }),
             },
         ],
