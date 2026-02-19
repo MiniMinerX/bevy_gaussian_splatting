@@ -158,7 +158,8 @@ impl Plugin for GaussianScenePlugin {
         app.register_type::<GaussianSceneLoaded>();
 
         app.init_asset::<GaussianScene>();
-        app.init_asset_loader::<GaussianSceneLoader>();
+        // GLB/glTF loading disabled (broken in Bevy without feature)
+        // app.init_asset_loader::<GaussianSceneLoader>();
 
         app.add_systems(Update, (spawn_scene,));
     }
@@ -214,14 +215,20 @@ impl AssetLoader for GaussianSceneLoader {
         _: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-
-        load_gltf_scene(&bytes, load_context).await
+        let _ = (reader, load_context);
+        // GLB/glTF loading disabled (broken in Bevy without feature)
+        // let mut bytes = Vec::new();
+        // reader.read_to_end(&mut bytes).await?;
+        // load_gltf_scene(&bytes, load_context).await
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "GLB/glTF loading disabled",
+        ))
     }
 
     fn extensions(&self) -> &[&str] {
-        &["gltf", "glb"]
+        // &["gltf", "glb"]
+        &[]
     }
 }
 

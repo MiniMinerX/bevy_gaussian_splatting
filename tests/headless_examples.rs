@@ -435,14 +435,15 @@ fn setup_gaussian_cloud(
     ));
     commands.insert_resource(CaptureRenderTarget(render_target_handle.clone()));
 
-    if let Some(input_scene) = &args.input_scene {
-        let scene_handle: Handle<GaussianScene> = asset_server.load(input_scene.clone());
-        commands.spawn((
-            GaussianSceneHandle(scene_handle),
-            Name::new("gaussian_scene"),
-            cloud_transform,
-        ));
-    } else {
+    // GLB/glTF scene loading disabled (broken in Bevy without feature)
+    // if let Some(input_scene) = &args.input_scene {
+    //     let scene_handle: Handle<GaussianScene> = asset_server.load(input_scene.clone());
+    //     commands.spawn((
+    //         GaussianSceneHandle(scene_handle),
+    //         Name::new("gaussian_scene"),
+    //         cloud_transform,
+    //     ));
+    // } else {
         match args.gaussian_mode {
             GaussianMode::Gaussian2d | GaussianMode::Gaussian3d => {
                 let cloud = if args.gaussian_count > 0 {
@@ -492,7 +493,6 @@ fn setup_gaussian_cloud(
                 ));
             }
         }
-    }
 
     commands.spawn((
         Camera3d::default(),

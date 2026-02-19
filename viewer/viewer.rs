@@ -173,17 +173,18 @@ fn setup_gaussian_cloud(
         .insert(ViewerMainCamera)
         .insert(GaussianCamera::default());
 
-    if let Some(input_scene) = &args.input_scene {
-        let input_uri = parse_input_file(input_scene.as_str());
-        log(&format!("loading {input_uri}"));
-        let scene: Handle<GaussianScene> = asset_server.load(&input_uri);
-        commands.spawn((
-            GaussianSceneHandle(scene),
-            Name::new("gaussian_scene"),
-            cloud_transform,
-        ));
-        return;
-    }
+    // GLB/glTF scene loading disabled (broken in Bevy without feature)
+    // if let Some(input_scene) = &args.input_scene {
+    //     let input_uri = parse_input_file(input_scene.as_str());
+    //     log(&format!("loading {input_uri}"));
+    //     let scene: Handle<GaussianScene> = asset_server.load(&input_uri);
+    //     commands.spawn((
+    //         GaussianSceneHandle(scene),
+    //         Name::new("gaussian_scene"),
+    //         cloud_transform,
+    //     ));
+    //     return;
+    // }
 
     match args.gaussian_mode {
         GaussianMode::Gaussian2d | GaussianMode::Gaussian3d => {
