@@ -97,11 +97,7 @@ pub fn std_sort<R: PlanarSync>(
                         sort_entry.index = idx as u32;
                     });
 
-                chunk.sort_unstable_by(|a, b| {
-                    bytemuck::cast::<u32, f32>(b.key)
-                        .partial_cmp(&bytemuck::cast::<u32, f32>(a.key))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                chunk.sort_unstable_by_key(|e| std::cmp::Reverse(e.key));
 
                 // TODO: update DrawIndirect buffer during sort phase (GPU sort will override default DrawIndirect)
                 sorted_any = true;
@@ -122,9 +118,8 @@ pub fn std_sort<R: PlanarSync>(
     let delta = sort_end_time - sort_start_time;
 
     if performed_sort {
-        sort_config.period_ms = sort_config
-            .period_ms
-            .max(sort_config.period_ms * 4 / 5)
-            .max(4 * delta.as_millis() as usize);
+        sort_config.period_ms = (sort_config.period_ms * 4 / 5)
+            .max(4 * delta.as_millis() as usize)
+            .max(4);
     }
 }

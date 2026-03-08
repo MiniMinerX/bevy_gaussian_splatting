@@ -10,7 +10,7 @@ use bevy::{
     },
     prelude::*,
     render::{
-        Render, RenderApp, RenderSystems,
+        Extract, Render, RenderApp, RenderSystems,
         render_asset::RenderAssets,
         render_graph::{Node, NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel},
         render_resource::{
@@ -35,7 +35,10 @@ use crate::{
     render::{
         CloudPipeline, CloudPipelineKey, GaussianUniformBindGroups, ShaderDefines, shader_defs,
     },
-    sort::{GpuSortedEntry, ShareSort, SortEntry, SortMode, SortPluginFlag, SortedEntriesHandle},
+    sort::{
+        GpuSortedEntry, ShareSort, SortConfig, SortEntry, SortMode, SortPluginFlag,
+        SortedEntriesHandle,
+    },
 };
 
 assert_cfg!(
@@ -75,7 +78,11 @@ where
             );
 
             render_app.init_resource::<RadixSortBuffers<R>>();
-            render_app.add_systems(ExtractSchedule, update_sort_buffers::<R>);
+            render_app.init_resource::<RadixSortConfig>();
+            render_app.add_systems(
+                ExtractSchedule,
+                (update_sort_buffers::<R>, extract_radix_sort_config),
+            );
         }
 
         if app.is_plugin_added::<SortPluginFlag>() {
@@ -109,6 +116,24 @@ where
             render_app.init_resource::<RadixSortPipeline<R>>();
         }
     }
+}
+
+/// Render-world mirror of `SortConfig::radix_digit_passes`.
+#[derive(Resource)]
+pub struct RadixSortConfig {
+    pub radix_digit_passes: u32,
+}
+
+impl Default for RadixSortConfig {
+    fn default() -> Self {
+        Self {
+            radix_digit_passes: 4,
+        }
+    }
+}
+
+fn extract_radix_sort_config(sort_config: Extract<Res<SortConfig>>, mut radix_config: ResMut<RadixSortConfig>) {
+    radix_config.radix_digit_passes = sort_config.radix_digit_passes.clamp(1, 4);
 }
 
 #[derive(Resource)]
@@ -600,6 +625,7 @@ where
         let pipeline = world.resource::<RadixSortPipeline<R>>();
         let gaussian_uniforms = world.resource::<GaussianUniformBindGroups>();
         let sort_buffers = world.resource::<RadixSortBuffers<R>>();
+        let radix_config = world.resource::<RadixSortConfig>();
 
         for (_camera, view_bind_group, view_uniform_offset, previous_view_uniform_offset) in
             self.view_bind_group.iter_manual(world)
@@ -629,21 +655,11 @@ where
                     let workgroup_entries_c = shader_defines.workgroup_entries_c;
                     let tile_workgroups = (cloud.len() as u32).div_ceil(workgroup_entries_c);
 
-                    {
-                        command_encoder.clear_buffer(
-                            &sorting_assets.sorting_global_buffer,
-                            0,
-                            None,
-                        );
-
-                        command_encoder.clear_buffer(
-                            &sorting_assets.sorting_status_counter_buffer,
-                            0,
-                            None,
-                        );
-
-                        command_encoder.clear_buffer(cloud.draw_indirect_buffer(), 0, None);
-                    }
+                    // Configurable pass count: skip lower digit passes for faster approximate sort.
+                    // e.g. radix_digit_passes=2 sorts only the top 16 bits (65K depth buckets).
+                    let active_passes =
+                        radix_config.radix_digit_passes.min(radix_digit_places);
+                    let start_pass = radix_digit_places - active_passes;
 
                     {
                         let mut pass =
@@ -692,8 +708,10 @@ where
                         pass.dispatch_workgroups(1, radix_digit_places, 1);
                     }
 
-                    // TODO: add options to only complete a fraction of the sorting process
-                    for pass_idx in 0..radix_digit_places {
+                    // Run only `active_passes` C-passes, starting from `start_pass`.
+                    // Iteration index tracks parity so the final result lands in sorted_entries
+                    // (parity 0 on even iteration count).
+                    for (iteration, pass_idx) in (start_pass..radix_digit_places).enumerate() {
                         let mut pass =
                             command_encoder.begin_compute_pass(&ComputePassDescriptor::default());
 
@@ -713,9 +731,9 @@ where
                         );
                         pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
 
-                        // For pass C, choose bind group based on digit place and parity
-                        // THIS IS THE FIX:
-                        let parity = (pass_idx % 2) as usize;
+                        // Choose bind group based on digit place and iteration parity.
+                        // iteration parity determines buffer ping-pong direction.
+                        let parity = (iteration % 2) as usize;
                         let bg_index = (pass_idx as usize) * 2 + parity;
                         pass.set_bind_group(
                             3,

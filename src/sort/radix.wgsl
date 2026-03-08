@@ -123,6 +123,8 @@ var<workgroup> sorted_tile_entries: array<Entry, #{WORKGROUP_ENTRIES_C}>;
 var<workgroup> tile_digit_counts: array<atomic<u32>, #{RADIX_BASE}>;
 var<workgroup> local_digit_counts: array<u32, #{RADIX_BASE}>;
 var<workgroup> local_digit_offsets: array<u32, #{RADIX_BASE}>;
+// Atomic offsets used during parallel intra-tile scatter
+var<workgroup> scatter_offsets: array<atomic<u32>, #{RADIX_BASE}>;
 var<workgroup> tile_entry_count_ws: u32;
 const INVALID_KEY: u32 = 0xFFFFFFFFu;
 
@@ -189,60 +191,57 @@ fn radix_sort_c_scatter(
     let threads = #{WORKGROUP_INVOCATIONS_C}u;
     let global_entry_offset = workgroup_id.y * tile_size;
 
-    // Step 1: Parallel load.
+    // Step 1: Parallel load + parallel digit count.
+    if (tid < #{RADIX_BASE}u) {
+        atomicStore(&tile_digit_counts[tid], 0u);
+    }
+    workgroupBarrier();
+
     for (var i = tid; i < tile_size; i += threads) {
         let idx = global_entry_offset + i;
         if (idx < gaussian_uniforms.count) {
             tile_input_entries[i] = input_entries[idx];
+            let entry = input_entries[idx];
+            let digit = (entry.key >> (sorting_pass_index * #{RADIX_BITS_PER_DIGIT}u)) & (#{RADIX_BASE}u - 1u);
+            atomicAdd(&tile_digit_counts[digit], 1u);
         } else {
             tile_input_entries[i] = Entry(INVALID_KEY, INVALID_KEY);
         }
     }
     workgroupBarrier();
 
-    // Step 2: Serial, stable sort within the tile.
+    // Step 2: Thread 0 computes prefix sum over digit counts (only 256 elements — negligible).
     if (tid == 0u) {
-        for (var i = 0u; i < #{RADIX_BASE}u; i+=1u) { local_digit_counts[i] = 0u; }
-
         var entries_in_tile = 0u;
-        for (var i = 0u; i < tile_size; i+=1u) {
-            let entry = tile_input_entries[i];
-            if (entry.value == INVALID_KEY) { continue; } // value sentinel marks padding
-
-            let digit = (entry.key >> (sorting_pass_index * #{RADIX_BITS_PER_DIGIT}u)) & (#{RADIX_BASE}u - 1u);
-            local_digit_counts[digit] += 1u;
-            entries_in_tile += 1u;
+        var sum = 0u;
+        for (var i = 0u; i < #{RADIX_BASE}u; i += 1u) {
+            let count = atomicLoad(&tile_digit_counts[i]);
+            local_digit_counts[i] = count;
+            local_digit_offsets[i] = sum;
+            sum += count;
+            entries_in_tile += count;
         }
         tile_entry_count_ws = entries_in_tile;
+    }
+    workgroupBarrier();
 
-        var sum = 0u;
-        for (var i = 0u; i < #{RADIX_BASE}u; i+=1u) {
-            local_digit_offsets[i] = sum;
-            sum += local_digit_counts[i];
-        }
+    // Step 3: Parallel scatter into sorted_tile_entries using atomic offsets.
+    if (tid < #{RADIX_BASE}u) {
+        atomicStore(&scatter_offsets[tid], local_digit_offsets[tid]);
+    }
+    workgroupBarrier();
 
-        for (var i = 0u; i < tile_size; i+=1u) {
-            let entry = tile_input_entries[i];
-            if (entry.value == INVALID_KEY) { continue; } // value sentinel marks padding
-
+    for (var i = tid; i < tile_size; i += threads) {
+        let entry = tile_input_entries[i];
+        if (entry.value != INVALID_KEY) {
             let digit = (entry.key >> (sorting_pass_index * #{RADIX_BITS_PER_DIGIT}u)) & (#{RADIX_BASE}u - 1u);
-            let dest_idx = local_digit_offsets[digit];
-            local_digit_offsets[digit] = dest_idx + 1u;
+            let dest_idx = atomicAdd(&scatter_offsets[digit], 1u);
             sorted_tile_entries[dest_idx] = entry;
         }
     }
     workgroupBarrier();
 
-    // Step 3: Parallel write from the locally-sorted tile to global memory.
-    if (tid == 0u) {
-        var sum = 0u;
-        for (var i = 0u; i < #{RADIX_BASE}u; i += 1u) {
-            local_digit_offsets[i] = sum;
-            sum += local_digit_counts[i];
-        }
-    }
-    workgroupBarrier();
-
+    // Step 4: Parallel write from the locally-sorted tile to global memory.
     for (var i = tid; i < tile_size; i += threads) {
         if (i < tile_entry_count_ws) {
             let entry = sorted_tile_entries[i];

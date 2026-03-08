@@ -77,11 +77,18 @@ impl Default for SortMode {
 #[reflect(Resource)]
 pub struct SortConfig {
     pub period_ms: usize,
+    /// Number of radix digit passes (1..=4). 4 = full 32-bit sort, 2 = 16-bit (~2x faster, visually near-identical).
+    #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+    pub radix_digit_passes: u32,
 }
 
 impl Default for SortConfig {
     fn default() -> Self {
-        Self { period_ms: 1000 }
+        Self {
+            period_ms: 100,
+            #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+            radix_digit_passes: 4,
+        }
     }
 }
 
