@@ -35,7 +35,7 @@ use crate::{
     render::{
         CloudPipeline, CloudPipelineKey, GaussianUniformBindGroups, ShaderDefines, shader_defs,
     },
-    sort::{GpuSortedEntry, SortEntry, SortMode, SortPluginFlag, SortedEntriesHandle},
+    sort::{GpuSortedEntry, ShareSort, SortEntry, SortMode, SortPluginFlag, SortedEntriesHandle},
 };
 
 assert_cfg!(
@@ -534,12 +534,15 @@ pub struct RadixSortNode<R: PlanarSync> {
         &'static RadixBindGroup,
     )>,
     initialized: bool,
-    view_bind_group: QueryState<(
-        &'static GaussianCamera,
-        &'static crate::render::GaussianComputeViewBindGroup,
-        &'static ViewUniformOffset,
-        &'static PreviousViewUniformOffset,
-    )>,
+    view_bind_group: QueryState<
+        (
+            &'static GaussianCamera,
+            &'static crate::render::GaussianComputeViewBindGroup,
+            &'static ViewUniformOffset,
+            &'static PreviousViewUniformOffset,
+        ),
+        Without<ShareSort>,
+    >,
 }
 
 impl<R: PlanarSync> FromWorld for RadixSortNode<R> {
@@ -547,7 +550,7 @@ impl<R: PlanarSync> FromWorld for RadixSortNode<R> {
         Self {
             gaussian_clouds: world.query(),
             initialized: false,
-            view_bind_group: world.query(),
+            view_bind_group: world.query_filtered(),
         }
     }
 }

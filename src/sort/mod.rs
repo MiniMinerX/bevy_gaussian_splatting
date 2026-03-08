@@ -129,11 +129,20 @@ where
         app.register_asset_reflect::<SortedEntries>();
 
         app.register_type::<SortTrigger>();
+        app.register_type::<ShareSort>();
         app.add_plugins(ExtractComponentPlugin::<SortTrigger>::default());
+        app.add_plugins(ExtractComponentPlugin::<ShareSort>::default());
 
         app.add_plugins(RenderAssetPlugin::<GpuSortedEntry>::default());
 
-        app.add_systems(Update, (update_sort_trigger, update_sorted_entries_sizes));
+        app.add_systems(
+            Update,
+            (
+                update_sort_trigger,
+                apply_share_sort.after(update_sort_trigger),
+                update_sorted_entries_sizes,
+            ),
+        );
 
         #[cfg(feature = "buffer_texture")]
         app.add_systems(PostUpdate, update_textures_on_change);
@@ -149,11 +158,27 @@ pub struct SortTrigger {
     pub last_sort_time: Option<Instant>,
 }
 
+/// Attach to a camera to reuse another camera's sort order instead of sorting independently.
+///
+/// This is useful for XR applications where multiple cameras have nearly identical viewpoints
+/// (e.g. left/right eye, or a PC mirror of an XR view). By sharing the sort data, you
+/// avoid redundant sort passes.
+///
+/// The `sort_cam` entity must be a camera with [`GaussianCamera`] that does NOT have `ShareSort`.
+#[derive(Component, ExtractComponent, Debug, Clone, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct ShareSort {
+    pub sort_cam: Entity,
+}
+
 #[allow(clippy::type_complexity)]
 fn update_sort_trigger(
     mut commands: Commands,
     new_gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>, Without<SortTrigger>)>,
-    mut existing_sort_triggers: Query<(&GlobalTransform, &Camera, &mut SortTrigger)>,
+    mut existing_sort_triggers: Query<
+        (&GlobalTransform, &Camera, &mut SortTrigger),
+        Without<ShareSort>,
+    >,
     sort_config: Res<SortConfig>,
 ) {
     for entity in new_gaussian_cameras.iter() {
@@ -190,6 +215,19 @@ fn update_sort_trigger(
             sort_trigger.last_sort_time = Some(Instant::now());
             sort_trigger.last_camera_position = camera_position;
         }
+    }
+}
+
+/// Copies the source camera's `camera_index` onto sharing cameras and ensures they never trigger a sort.
+fn apply_share_sort(
+    mut share_cameras: Query<(&ShareSort, &mut SortTrigger)>,
+    source_cameras: Query<&SortTrigger, Without<ShareSort>>,
+) {
+    for (share_sort, mut trigger) in share_cameras.iter_mut() {
+        if let Ok(source_trigger) = source_cameras.get(share_sort.sort_cam) {
+            trigger.camera_index = source_trigger.camera_index;
+        }
+        trigger.needs_sort = false;
     }
 }
 

@@ -1,5 +1,5 @@
 #![allow(incomplete_features)]
-#![cfg_attr(feature = "nightly_generic_alias", feature(lazy_type_alias))]
+//#![cfg_attr(feature = "nightly_generic_alias", feature(lazy_type_alias))]
 
 use bevy::prelude::*;
 pub use bevy_interleave::prelude::*;
@@ -27,6 +27,7 @@ pub use io::scene::{
 };
 
 pub use material::spherical_harmonics::SphericalHarmonicCoefficients;
+pub use sort::ShareSort;
 
 use io::IoPlugin;
 
