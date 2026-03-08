@@ -146,10 +146,11 @@ where
             Update,
             (
                 update_sort_trigger,
-                apply_share_sort.after(update_sort_trigger),
                 update_sorted_entries_sizes,
             ),
         );
+
+        app.add_systems(PostUpdate, apply_share_sort);
 
         #[cfg(feature = "buffer_texture")]
         app.add_systems(PostUpdate, update_textures_on_change);
