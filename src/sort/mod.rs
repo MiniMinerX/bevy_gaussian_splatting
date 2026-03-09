@@ -146,11 +146,12 @@ where
             Update,
             (
                 update_sort_trigger,
+                // Keep shared-camera camera_index in sync in the same schedule as trigger updates.
+                // This avoids stale/static sharing in frame extraction paths.
+                apply_share_sort.after(update_sort_trigger),
                 update_sorted_entries_sizes,
             ),
         );
-
-        app.add_systems(PostUpdate, apply_share_sort);
 
         #[cfg(feature = "buffer_texture")]
         app.add_systems(PostUpdate, update_textures_on_change);
