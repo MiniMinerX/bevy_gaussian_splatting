@@ -37,7 +37,7 @@ use crate::{
     },
     sort::{
         GpuSortedEntry, ShareSort, SortConfig, SortEntry, SortMode, SortPluginFlag,
-        SortedEntriesHandle, SortTrigger,
+        SortedEntriesHandle,
     },
 };
 
@@ -288,7 +288,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: true,
+                    has_dynamic_offset: false,
                     min_binding_size: BufferSize::new(std::mem::size_of::<SortEntry>() as u64),
                 },
                 count: None,
@@ -298,7 +298,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: true,
+                    has_dynamic_offset: false,
                     min_binding_size: BufferSize::new(std::mem::size_of::<SortEntry>() as u64),
                 },
                 count: None,
@@ -562,7 +562,6 @@ pub struct RadixSortNode<R: PlanarSync> {
     view_bind_group: QueryState<
         (
             &'static GaussianCamera,
-            &'static SortTrigger,
             &'static crate::render::GaussianComputeViewBindGroup,
             &'static ViewUniformOffset,
             &'static PreviousViewUniformOffset,
@@ -622,15 +621,13 @@ where
             return Ok(());
         }
 
-        const STORAGE_BUFFER_OFFSET_ALIGNMENT: u32 = 256;
-
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<RadixSortPipeline<R>>();
         let gaussian_uniforms = world.resource::<GaussianUniformBindGroups>();
         let sort_buffers = world.resource::<RadixSortBuffers<R>>();
         let radix_config = world.resource::<RadixSortConfig>();
 
-        for (_camera, sort_trigger, view_bind_group, view_uniform_offset, previous_view_uniform_offset) in
+        for (_camera, view_bind_group, view_uniform_offset, previous_view_uniform_offset) in
             self.view_bind_group.iter_manual(world)
         {
             for (cloud_handle, cloud_bind_group, radix_bind_group) in
@@ -647,15 +644,6 @@ where
                         .asset_map
                         .contains_key(&cloud_handle.handle().id())
                 );
-                // Per-view offset so each camera sorts its own chunk in the sorted entry buffer.
-                // entry_buffer_b is single-chunk scratch, so it always uses offset 0.
-                let chunk_offset_bytes = (sort_trigger.camera_index * cloud.len()
-                    * std::mem::size_of::<SortEntry>()) as u32;
-                let aligned_offset = (chunk_offset_bytes + STORAGE_BUFFER_OFFSET_ALIGNMENT - 1)
-                    & !(STORAGE_BUFFER_OFFSET_ALIGNMENT - 1);
-                // [binding_4_offset, binding_5_offset]. Parity 0: input=sorted, output=scratch → [aligned, 0]. Parity 1: input=scratch, output=sorted → [0, aligned].
-                let radix_dynamic_offsets_parity_0: [u32; 2] = [aligned_offset, 0];
-                let radix_dynamic_offsets_parity_1: [u32; 2] = [0, aligned_offset];
 
                 {
                     let command_encoder = render_context.command_encoder();
@@ -697,11 +685,7 @@ where
                             &[0],
                         );
                         pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
-                        pass.set_bind_group(
-                            3,
-                            &radix_bind_group.radix_sort_bind_groups[0],
-                            &radix_dynamic_offsets_parity_0,
-                        );
+                        pass.set_bind_group(3, &radix_bind_group.radix_sort_bind_groups[0], &[]);
                         pass.dispatch_workgroups(1, 1, 1);
 
                         let radix_sort_a = pipeline_cache
@@ -750,15 +734,10 @@ where
                         // iteration parity determines buffer ping-pong direction.
                         let parity = (iteration % 2) as usize;
                         let bg_index = (pass_idx as usize) * 2 + parity;
-                        let offsets = if parity == 0 {
-                            &radix_dynamic_offsets_parity_0
-                        } else {
-                            &radix_dynamic_offsets_parity_1
-                        };
                         pass.set_bind_group(
                             3,
                             &radix_bind_group.radix_sort_bind_groups[bg_index],
-                            offsets,
+                            &[],
                         );
 
                         let radix_sort_c_count = pipeline_cache
