@@ -47,6 +47,9 @@ assert_cfg!(
 pub enum SortMode {
     None,
 
+    /// Order-independent transparency: no sort, identity indices, weighted blended accumulation + resolve.
+    Oit,
+
     #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
     Radix,
 

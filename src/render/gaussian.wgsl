@@ -498,8 +498,16 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
 
     // TODO: round alpha to terminate depth test?
 
+#ifdef USE_OIT
+    // Weighted blended OIT: output (accum_rgb, accum_weight) for additive accumulation.
+    // Weight from "Weighted Blended OIT" (McGuire & Bavoil): reduces contribution of near-opaque fragments.
+    let weight = max(1e-2, pow(1.0 - 0.5 * alpha, 2.0));
+    let premul = input.color.rgb * alpha;
+    return vec4<f32>(premul * weight, weight);
+#else
     return vec4<f32>(
         input.color.rgb * alpha,
         alpha,
     );
+#endif
 }

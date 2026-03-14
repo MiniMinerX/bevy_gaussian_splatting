@@ -31,7 +31,7 @@ use bevy::{
         renderer::RenderDevice,
         sync_world::RenderEntity,
         view::{
-            ExtractedView, RenderVisibilityRanges, RenderVisibleEntities,
+            ExtractedView, RenderVisibilityRanges, RenderVisibleEntities, RetainedViewEntity,
             VISIBILITY_RANGES_STORAGE_BUFFER_COUNT, ViewUniform, ViewUniformOffset, ViewUniforms,
         },
     },
@@ -47,6 +47,7 @@ use crate::{
         interface::CommonCloud,
         settings::{CloudSettings, DrawMode, GaussianColorSpace, GaussianMode, RasterizeMode},
     },
+    sort::SortMode,
     material::{
         spherical_harmonics::{HALF_SH_COEFF_COUNT, SH_COEFF_COUNT, SH_DEGREE, SH_VEC4_PLANES},
         spherindrical_harmonics::{SH_4D_COEFF_COUNT, SH_4D_DEGREE_TIME},
@@ -112,6 +113,7 @@ where
                 .add_render_command::<Transparent3d, DrawGaussians<R>>()
                 .init_resource::<GaussianUniformBindGroups>()
                 .init_resource::<PlanarStorageRebindQueue<R>>()
+                .init_resource::<ViewOitItems>()
                 .add_systems(
                     ExtractSchedule,
                     (
@@ -213,6 +215,13 @@ where
                 .init_resource::<SpecializedRenderPipelines<CloudPipeline<R>>>();
         }
     }
+}
+
+/// Per-view list of (render_entity, pipeline_key) for OIT. When a view has OIT items,
+/// gaussians are drawn in the OIT node (accum + resolve) instead of Transparent3d.
+#[derive(Resource, Default)]
+pub struct ViewOitItems {
+    pub items: std::collections::HashMap<RetainedViewEntity, Vec<(Entity, CloudPipelineKey)>>,
 }
 
 #[derive(Resource)]
@@ -347,6 +356,7 @@ fn queue_gaussians<R: PlanarSync>(
     gaussian_clouds: Res<RenderAssets<R::GpuPlanarType>>,
     sorted_entries: Res<RenderAssets<GpuSortedEntry>>,
     mut transparent_render_phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
+    mut view_oit_items: ResMut<ViewOitItems>,
     mut views: Query<(
         &ExtractedView,
         &GaussianCamera,
@@ -373,6 +383,8 @@ fn queue_gaussians<R: PlanarSync>(
         .read()
         .id::<DrawGaussians<R>>();
 
+    view_oit_items.items.clear();
+
     for (view, _, visible_entities, msaa) in &mut views {
         debug!("queue gaussians view");
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
@@ -380,6 +392,21 @@ fn queue_gaussians<R: PlanarSync>(
             debug!("transparent phase not found");
             continue;
         };
+
+        // First pass: determine if this view uses OIT (any visible cloud has SortMode::Oit)
+        let mut view_uses_oit = false;
+        for (render_entity, _) in visible_entities.iter::<CloudVisibilityClass>() {
+            if let Ok((_, _, _, _, settings, _)) =
+                gaussian_splatting_bundles.get(*render_entity)
+            {
+                if settings.sort_mode == SortMode::Oit {
+                    view_uses_oit = true;
+                    break;
+                }
+            }
+        }
+
+        let mut oit_list_for_view = Vec::new();
 
         debug!("visible entities...");
         for (render_entity, visible_entity) in visible_entities.iter::<CloudVisibilityClass>() {
@@ -414,9 +441,16 @@ fn queue_gaussians<R: PlanarSync>(
                 rasterize_mode: settings.rasterize_mode,
                 sample_count: msaa.samples(),
                 hdr: view.hdr,
+                oit: settings.sort_mode == SortMode::Oit,
             };
 
             let pipeline = pipelines.specialize(&pipeline_cache, &custom_pipeline, key);
+
+            if view_uses_oit {
+                oit_list_for_view.push((*render_entity, key));
+            }
+            // When OIT: still add to Transparent3d so gaussians are drawn (additive blend, no resolve yet).
+            // TODO: when OIT node is added, skip adding to Transparent3d and draw via OIT node (accum + resolve).
 
             let rangefinder = view.rangefinder3d();
             let aabb_center = (aabb.min() + aabb.max()) / 2.0;
@@ -436,6 +470,12 @@ fn queue_gaussians<R: PlanarSync>(
                 extra_index: PhaseItemExtraIndex::None,
                 indexed: false,
             });
+        }
+
+        if view_uses_oit && !oit_list_for_view.is_empty() {
+            view_oit_items
+                .items
+                .insert(view.retained_view_entity, oit_list_for_view);
         }
     }
 }
@@ -775,6 +815,10 @@ pub fn shader_defs(key: CloudPipelineKey) -> Vec<ShaderDefVal> {
         ),
     ];
 
+    if key.oit {
+        shader_defs.push("USE_OIT".into());
+    }
+
     if key.aabb {
         shader_defs.push("USE_AABB".into());
     }
@@ -876,6 +920,8 @@ pub struct CloudPipelineKey {
     pub rasterize_mode: RasterizeMode,
     pub sample_count: u32,
     pub hdr: bool,
+    /// Weighted blended OIT: additive accumulation, no sort.
+    pub oit: bool,
 }
 
 impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
@@ -884,10 +930,29 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let shader_defs = shader_defs(key);
 
-        let format = if key.hdr {
+        let format = if key.oit {
+            TextureFormat::Rgba32Float
+        } else if key.hdr {
             TextureFormat::Rgba16Float
         } else {
             TextureFormat::Rgba8UnormSrgb
+        };
+
+        let blend = if key.oit {
+            Some(BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Add,
+                },
+            })
+        } else {
+            Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING)
         };
 
         debug!("specializing cloud pipeline");
@@ -912,7 +977,7 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
                 entry_point: Some("fs_main".into()),
                 targets: vec![Some(ColorTargetState {
                     format,
-                    blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    blend,
                     write_mask: ColorWrites::ALL,
                 })],
             }),

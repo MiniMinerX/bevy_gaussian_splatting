@@ -293,7 +293,7 @@ fn resolve_thumbnail_scene_input(input_scene: &str) -> String {
 }
 
 fn supported_thumbnail_sort_modes() -> String {
-    let mut modes = vec!["default", "none"];
+    let mut modes = vec!["default", "none", "oit"];
     #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
     modes.push("radix");
     #[cfg(feature = "sort_rayon")]
@@ -315,6 +315,9 @@ fn preferred_thumbnail_sort_mode() -> SortMode {
         }
         if value == "none" {
             return SortMode::None;
+        }
+        if value == "oit" {
+            return SortMode::Oit;
         }
         #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
         if value == "radix" {
