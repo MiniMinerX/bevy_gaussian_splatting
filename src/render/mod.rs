@@ -365,19 +365,15 @@ fn queue_gaussians<R: PlanarSync>(
     )>,
     gaussian_splatting_bundles: Query<GpuCloudBundleQuery<R>>,
 ) {
-    debug!("queue_gaussians");
-
     let warmup = views.iter().any(|(_, camera, _, _)| camera.warmup);
     if warmup {
-        debug!("skipping gaussian cloud render during warmup");
         return;
     }
 
     // TODO: condition this system based on CloudBindGroup attachment
     if gaussian_cloud_uniform.buffer().is_none() {
-        debug!("uniform buffer not initialized");
         return;
-    };
+    }
 
     let draw_custom = transparent_3d_draw_functions
         .read()
@@ -386,10 +382,8 @@ fn queue_gaussians<R: PlanarSync>(
     view_oit_items.items.clear();
 
     for (view, _, visible_entities, msaa) in &mut views {
-        debug!("queue gaussians view");
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
         else {
-            debug!("transparent phase not found");
             continue;
         };
 
@@ -408,25 +402,17 @@ fn queue_gaussians<R: PlanarSync>(
 
         let mut oit_list_for_view = Vec::new();
 
-        debug!("visible entities...");
         for (render_entity, visible_entity) in visible_entities.iter::<CloudVisibilityClass>() {
-            if gaussian_splatting_bundles.get(*render_entity).is_err() {
-                debug!("gaussian splatting bundle not found");
+            let Ok((_entity, cloud_handle, aabb, sorted_entries_handle, settings, transform)) =
+                gaussian_splatting_bundles.get(*render_entity)
+            else {
                 continue;
-            }
+            };
 
-            let (_entity, cloud_handle, aabb, sorted_entries_handle, settings, transform) =
-                gaussian_splatting_bundles.get(*render_entity).unwrap();
-
-            debug!("queue gaussians clouds");
-            if gaussian_clouds.get(cloud_handle.handle()).is_none() {
-                debug!("gaussian cloud asset not found");
-                return;
-            }
-
-            if sorted_entries.get(sorted_entries_handle).is_none() {
-                debug!("sorted entries asset not found");
-                return;
+            if gaussian_clouds.get(cloud_handle.handle()).is_none()
+                || sorted_entries.get(sorted_entries_handle).is_none()
+            {
+                continue;
             }
 
             let msaa = msaa.cloned().unwrap_or_default();
@@ -933,6 +919,9 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
         // Format must match the render pass format. When HDR is enabled, Bevy's core pipeline
         // uses Rgba16Float for the render pass, so we must match that even when OIT is enabled.
         // OIT can work with Rgba16Float, though with less precision than Rgba32Float.
+        // Note: OIT with Rgba16Float may show brightness/opacity issues due to precision loss
+        // in weight accumulation. For best quality, use OIT without HDR (Rgba32Float) or implement
+        // a custom OIT render target with Rgba32Float.
         let format = if key.hdr {
             TextureFormat::Rgba16Float
         } else if key.oit {
@@ -958,7 +947,6 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
             Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING)
         };
 
-        debug!("specializing cloud pipeline");
 
         RenderPipelineDescriptor {
             label: Some("gaussian cloud render pipeline".into()),
@@ -1070,22 +1058,18 @@ pub fn extract_gaussians<R: PlanarSync>(
     for (entity, visibility, cloud_handle, aabb, sorted_entries, settings, transform) in
         gaussians_query.iter()
     {
-        debug!("extracting gaussian cloud entity: {:?}", entity);
 
         if !visibility.get() {
-            debug!("gaussian cloud not visible");
             continue;
         }
 
         if let Some(load_state) = asset_server.get_load_state(cloud_handle.handle())
             && load_state.is_loading()
         {
-            debug!("gaussian cloud asset loading");
             continue;
         }
 
         if gaussian_cloud_res.get(cloud_handle.handle()).is_none() {
-            debug!("gaussian cloud asset not found");
             continue;
         }
 
@@ -1191,24 +1175,20 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
         if let Some(load_state) = asset_server.get_load_state(cloud_handle.handle())
             && load_state.is_loading()
         {
-            debug!("queue gaussian bind group: cloud asset loading");
             continue;
         }
 
         if gaussian_cloud_res.get(cloud_handle.handle()).is_none() {
-            debug!("queue gaussian bind group: cloud asset not found");
             continue;
         }
 
         if let Some(load_state) = asset_server.get_load_state(&sorted_entries_handle.0)
             && load_state.is_loading()
         {
-            debug!("queue gaussian bind group: sorted entries asset loading");
             continue;
         }
 
         if sorted_entries_res.get(&sorted_entries_handle.0).is_none() {
-            debug!("queue gaussian bind group: sorted entries asset not found");
             continue;
         }
 

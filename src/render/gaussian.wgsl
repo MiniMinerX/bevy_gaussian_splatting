@@ -501,7 +501,11 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
 #ifdef USE_OIT
     // Weighted blended OIT: output (accum_rgb, accum_weight) for additive accumulation.
     // Weight from "Weighted Blended OIT" (McGuire & Bavoil): reduces contribution of near-opaque fragments.
-    let weight = max(1e-2, pow(1.0 - 0.5 * alpha, 2.0));
+    // Note: When using Rgba16Float (HDR mode), precision is reduced. Using a slightly higher
+    // minimum weight helps maintain quality with lower precision formats.
+    // Optimized: use multiplication instead of pow() for x^2
+    let alpha_factor = 1.0 - 0.5 * alpha;
+    let weight = max(1e-1, alpha_factor * alpha_factor);
     let premul = input.color.rgb * alpha;
     return vec4<f32>(premul * weight, weight);
 #else

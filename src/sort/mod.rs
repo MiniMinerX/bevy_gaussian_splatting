@@ -88,9 +88,14 @@ pub struct SortConfig {
 impl Default for SortConfig {
     fn default() -> Self {
         Self {
-            period_ms: 100,
+            // Increased period reduces sort frequency for better performance
+            // Adjust based on camera movement speed (higher = less frequent sorting)
+            period_ms: 200,
             #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
-            radix_digit_passes: 4,
+            // 2 passes = 16-bit sort (~2x faster, visually near-identical)
+            // 4 passes = full 32-bit sort (slower but more precise)
+            // For better performance, use 2 passes unless you need maximum precision
+            radix_digit_passes: 2,
         }
     }
 }
