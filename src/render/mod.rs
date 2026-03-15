@@ -930,10 +930,13 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let shader_defs = shader_defs(key);
 
-        let format = if key.oit {
-            TextureFormat::Rgba32Float
-        } else if key.hdr {
+        // Format must match the render pass format. When HDR is enabled, Bevy's core pipeline
+        // uses Rgba16Float for the render pass, so we must match that even when OIT is enabled.
+        // OIT can work with Rgba16Float, though with less precision than Rgba32Float.
+        let format = if key.hdr {
             TextureFormat::Rgba16Float
+        } else if key.oit {
+            TextureFormat::Rgba32Float
         } else {
             TextureFormat::Rgba8UnormSrgb
         };
