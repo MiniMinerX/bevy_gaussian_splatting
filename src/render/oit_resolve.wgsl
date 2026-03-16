@@ -7,18 +7,18 @@
 @group(0) @binding(2) var resolve_sampler: sampler;
 // Layout must match OitSettingsUniform (only resolve fields used here).
 struct OitResolveParams {
-    _depth_weight_scale: f32,
-    _min_weight: f32,
-    _depth_weight_power: f32,
-    _opacity_scale: f32,
+    depth_weight_scale_unused: f32,
+    min_weight_unused: f32,
+    depth_weight_power_unused: f32,
+    opacity_scale_unused: f32,
     accum_alpha_scale: f32,
     resolve_opacity_power: f32,
     opacity_bias: f32,
-    _pad0: f32,
-    _half_res: u32,
-    _pad1: u32,
-    _pad2: u32,
-    _pad3: u32,
+    pad0: f32,
+    half_res_unused: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 @group(0) @binding(3) var<uniform> oit_resolve: OitResolveParams;
 
