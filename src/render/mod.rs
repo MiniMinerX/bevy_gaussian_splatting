@@ -1478,7 +1478,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
         _: &P,
         (gaussian_view_bind_group, view_uniform, previous_view_uniform): ROQueryItem<
             'w,
-            'w',
+            'w,
             Self::ViewQuery,
         >,
         _entity: Option<()>,
@@ -1488,7 +1488,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
         // View bind group has 2 dynamic offset bindings: ViewUniform (0), PreviousViewData (2).
         let dynamic_offsets = [
             view_uniform.offset,
-            previous_view_uniform.map(|p| p.offset).unwrap_or(0),
+            previous_view_uniform.map(|p| p.offset).unwrap_or(0u32),
         ];
         pass.set_bind_group(I, &gaussian_view_bind_group.value, &dynamic_offsets);
 
