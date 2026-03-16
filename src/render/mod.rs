@@ -609,6 +609,16 @@ where
                 count: None,
             },
             visibility_ranges_entry,
+            BindGroupLayoutEntry {
+                binding: 15,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(oit::OitSettingsUniform::min_size()),
+                },
+                count: None,
+            },
         ];
 
         let compute_view_layout_entries = vec![
@@ -1309,6 +1319,8 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
     >,
     visibility_ranges: Res<RenderVisibilityRanges>,
     globals_buffer: Res<GlobalsBuffer>,
+    view_oit_buffers: Res<oit::ViewOitSettingsBuffers>,
+    default_oit_buffer: Res<oit::DefaultOitSettingsBuffer>,
 ) {
     let Some(view_binding) = view_uniforms.uniforms.binding() else {
         return;
@@ -1327,7 +1339,13 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
         || view_uniforms.is_changed()
         || previous_view_uniforms.is_changed()
         || globals_buffer.is_changed()
-        || visibility_ranges.is_changed();
+        || visibility_ranges.is_changed()
+        || view_oit_buffers.is_changed()
+        || default_oit_buffer.is_changed();
+
+    let Some(default_oit_buffer_ref) = default_oit_buffer.0.as_ref() else {
+        return;
+    };
 
     for (entity, _extracted_view, _maybe_previous_view, existing_bind_group) in &views {
         if !resources_changed && existing_bind_group.is_some() {
@@ -1335,6 +1353,12 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
         }
 
         let layout = &gaussian_cloud_pipeline.view_layout;
+
+        let oit_resource = view_oit_buffers
+            .buffers
+            .get(&entity)
+            .map(|b| b.as_entire_binding())
+            .unwrap_or_else(|| default_oit_buffer_ref.as_entire_binding());
 
         let entries = vec![
             BindGroupEntry {
@@ -1352,6 +1376,10 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
             BindGroupEntry {
                 binding: 14,
                 resource: visibility_ranges_buffer.as_entire_binding(),
+            },
+            BindGroupEntry {
+                binding: 15,
+                resource: oit_resource,
             },
         ];
 

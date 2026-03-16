@@ -573,6 +573,7 @@ impl Plugin for OitRenderGraphPlugin {
                 Render,
                 prepare_view_oit_settings
                     .in_set(bevy::render::RenderSystems::PrepareBindGroups)
+                    .before(render::queue_gaussian_view_bind_groups::<Gaussian3d>)
                     .before(render::queue_gaussian_compute_view_bind_groups::<Gaussian3d>),
             )
             .add_systems(Render, prepare_oit_textures)
