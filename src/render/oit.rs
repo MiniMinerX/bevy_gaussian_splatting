@@ -117,8 +117,13 @@ pub struct OitSettingsUniform {
     pub _pad: Vec2,
 }
 
+/// OIT clear pass: clear accum texture for every view that has OIT content.
+/// Runs before accum so 3d/4d passes can use Load and never show stale content.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct OitClearLabel;
+
 /// OIT accumulation pass: draw gaussians to accum texture (additive).
-/// One label per format so we can order 3d before 4d (3d clears, 4d additive).
+/// One label per format so we can order 3d before 4d (both use Load after clear).
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
 pub struct OitAccumLabel3d;
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
@@ -139,6 +144,58 @@ pub struct OitTextureEntry {
     pub texture: Texture,
     pub view: TextureView,
     pub size: (u32, u32),
+}
+
+/// Node that clears the OIT accum texture for every view that has OIT content.
+/// Ensures we never composite stale content when the camera moves (e.g. if the 3d
+/// accum pass is skipped for a view, or view lookup fails).
+#[derive(Default)]
+pub struct OitClearNode;
+
+impl Node for OitClearNode {
+    fn run(
+        &self,
+        _graph: &mut RenderGraphContext,
+        render_context: &mut RenderContext,
+        world: &World,
+    ) -> Result<(), NodeRunError> {
+        let view_oit_items = match world.get_resource::<ViewOitItems>() {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        if view_oit_items.items.is_empty() {
+            return Ok(());
+        }
+        let oit_cache = match world.get_resource::<OitTextureCache>() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        for (retained_view_entity, lists) in &view_oit_items.items {
+            if lists.0.is_empty() && lists.1.is_empty() {
+                continue;
+            }
+            let Some(entry) = oit_cache.cache.get(retained_view_entity) else {
+                continue;
+            };
+            let _pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                label: Some("oit_clear"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &entry.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(LinearRgba::new(0.0, 0.0, 0.0, 0.0).into()),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            // No draw calls: clear happens on pass start, pass ends when dropped
+        }
+        Ok(())
+    }
 }
 
 /// Per-view OIT settings buffers (binding 15 in view bind group). Populated by `prepare_view_oit_settings`.
@@ -326,13 +383,8 @@ where
                 previous_offset,
             ];
 
-            // Clear on first OIT accum node (3d); 4d and others additive on top.
-            let clear_on_run = TypeId::of::<R>() == TypeId::of::<Gaussian3d>();
-            let load_op = if clear_on_run {
-                LoadOp::Clear(LinearRgba::new(0.0, 0.0, 0.0, 0.0).into())
-            } else {
-                LoadOp::Load
-            };
+            // Clear is done by OitClearNode; both 3d and 4d use Load so we never show stale content.
+            let load_op = LoadOp::Load;
 
             let depth_view = view_depth_texture
                 .map(|depth_tex| depth_tex.texture.create_view(&Default::default()));
@@ -703,10 +755,12 @@ impl Plugin for OitRenderGraphPlugin {
                     .after(render::queue_gaussians::<Gaussian4d>),
             )
             .add_systems(RenderStartup, init_oit_resolve_pipeline)
+            .add_render_graph_node::<OitClearNode>(Core3d, OitClearLabel)
             .add_render_graph_node::<OitAccumNode<Gaussian3d>>(Core3d, OitAccumLabel3d)
             .add_render_graph_node::<OitAccumNode<Gaussian4d>>(Core3d, OitAccumLabel4d)
             .add_render_graph_node::<ViewNodeRunner<OitResolveNode>>(Core3d, OitResolveLabel)
-            .add_render_graph_edge(Core3d, Node3d::MainOpaquePass, OitAccumLabel3d)
+            .add_render_graph_edge(Core3d, Node3d::MainOpaquePass, OitClearLabel)
+            .add_render_graph_edge(Core3d, OitClearLabel, OitAccumLabel3d)
             .add_render_graph_edge(Core3d, OitAccumLabel3d, OitAccumLabel4d)
             .add_render_graph_edge(Core3d, OitAccumLabel4d, Node3d::MainTransparentPass)
             .add_render_graph_edge(Core3d, Node3d::MainTransparentPass, OitResolveLabel)
