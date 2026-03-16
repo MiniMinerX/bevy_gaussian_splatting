@@ -2,6 +2,7 @@
     view,
     gaussian_uniforms,
     Entry,
+    oit_settings,
 }
 #import bevy_gaussian_splatting::classification::class_to_rgb
 #import bevy_gaussian_splatting::depth::depth_to_rgb
