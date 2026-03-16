@@ -1057,8 +1057,7 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
 #[allow(type_alias_bounds)]
 type DrawGaussians<R: bevy_interleave::prelude::PlanarSync> = (
     SetItemPipeline,
-    // SetViewBindGroup<0>,
-    SetPreviousViewBindGroup<0>,
+    SetViewBindGroup<0>,
     SetGaussianUniformBindGroup<1>,
     DrawGaussianInstanced<R>,
 );
