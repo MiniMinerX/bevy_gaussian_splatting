@@ -1,6 +1,7 @@
 // Fullscreen resolve for weighted blended OIT: resolve accum then composite over scene.
-// accum: (sum(premul*weight), sum(weight)); resolve to rgb/weight, alpha = min(weight,1).
-// Output: scene * (1 - oit_alpha) + oit_rgb * oit_alpha (over blend).
+// accum.rgb = sum(color_i * alpha_i * w_i), accum.a = sum(alpha_i * w_i).
+// oit_rgb = accum.rgb / accum.a (weighted average color).
+// oit_alpha = saturate(accum.a) (approximate coverage; exact requires a revealage buffer).
 @group(0) @binding(0) var scene_tex: texture_2d<f32>;
 @group(0) @binding(1) var accum_tex: texture_2d<f32>;
 @group(0) @binding(2) var resolve_sampler: sampler;

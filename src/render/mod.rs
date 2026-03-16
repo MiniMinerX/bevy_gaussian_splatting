@@ -368,7 +368,7 @@ type GpuCloudBindGroupQuery<R: bevy_interleave::prelude::PlanarSync> = (
 );
 
 #[allow(clippy::too_many_arguments)]
-fn queue_gaussians<R: PlanarSync>(
+pub(crate) fn queue_gaussians<R: PlanarSync>(
     gaussian_cloud_uniform: Res<ComponentUniforms<CloudUniform>>,
     transparent_3d_draw_functions: Res<DrawFunctions<Transparent3d>>,
     custom_pipeline: Res<CloudPipeline<R>>,
@@ -1032,27 +1032,22 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
                 conservative: false,
                 polygon_mode: PolygonMode::Fill,
             },
-            // OIT accum pass has no depth attachment; use depth only for non-OIT passes.
-            depth_stencil: if key.oit {
-                None
-            } else {
-                Some(DepthStencilState {
-                    format: TextureFormat::Depth32Float,
-                    depth_write_enabled: false,
-                    depth_compare: CompareFunction::GreaterEqual,
-                    stencil: StencilState {
-                        front: StencilFaceState::IGNORE,
-                        back: StencilFaceState::IGNORE,
-                        read_mask: 0,
-                        write_mask: 0,
-                    },
-                    bias: DepthBiasState {
-                        constant: 0,
-                        slope_scale: 0.0,
-                        clamp: 0.0,
-                    },
-                })
-            },
+            depth_stencil: Some(DepthStencilState {
+                format: TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::GreaterEqual,
+                stencil: StencilState {
+                    front: StencilFaceState::IGNORE,
+                    back: StencilFaceState::IGNORE,
+                    read_mask: 0,
+                    write_mask: 0,
+                },
+                bias: DepthBiasState {
+                    constant: 0,
+                    slope_scale: 0.0,
+                    clamp: 0.0,
+                },
+            }),
             multisample: MultisampleState {
                 count: key.sample_count,
                 mask: !0,

@@ -531,17 +531,10 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
     // TODO: round alpha to terminate depth test?
 
 #ifdef USE_OIT
-    // Weighted blended OIT: output (accum_rgb, accum_weight) for additive accumulation.
-    // This output MUST be rendered to a dedicated accum texture and then resolved (accum.rgb/weight, min(weight,1))
-    // in a separate pass. Drawing this directly to the main target produces wrong (white/whispy) results.
-    // Weight from "Weighted Blended OIT" (McGuire & Bavoil): reduces contribution of near-opaque fragments.
-    // Depth weighting favors closer fragments (1/(1 + depth*scale)) so ordering is less critical.
-    let alpha_factor = 1.0 - 0.5 * alpha;
-    var weight = max(1e-3, alpha_factor * alpha_factor);
-    let depth_weight = 1.0 / (1.0 + input.view_depth * 0.01);
-    weight *= depth_weight;
+    let depth_weight = 1.0 / (1.0 + input.view_depth * oit_settings.depth_weight_scale);
+    let weight = max(oit_settings.min_weight, depth_weight);
     let premul = input.color.rgb * alpha;
-    return vec4<f32>(premul * weight, weight);
+    return vec4<f32>(premul * weight, alpha * weight);
 #else
     return vec4<f32>(
         input.color.rgb * alpha,

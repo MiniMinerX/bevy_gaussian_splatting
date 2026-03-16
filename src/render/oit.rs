@@ -34,7 +34,7 @@ use crate::render::{
     PlanarStorageBindGroup, SortBindGroup, ViewOitItems,
 };
 use crate::sort::SortTrigger;
-use bevy::render::view::ExtractedView;
+use bevy::render::view::{ExtractedView, ViewDepthTexture};
 
 // --- OIT settings (inspector-editable component) -----------------------------------------------
 
@@ -179,6 +179,7 @@ pub struct OitAccumNode<R: PlanarSync> {
         Option<Has<MotionVectorPrepass>>,
         Option<&'static PreviousViewUniformOffset>,
         &'static SortTrigger,
+        Option<&'static ViewDepthTexture>,
     ), With<GaussianCamera>>,
     cloud_query: QueryState<(
         Entity,
@@ -251,17 +252,16 @@ where
                 Some(e) => e,
                 None => continue,
             };
-            // Find the render-world view entity that has this retained view entity.
             let mut view_entity_opt = None;
-            for (v_entity, ext_view, vg, vo, has_motion, prev_vo, st) in self.view_query.iter_manual(world) {
+            for (v_entity, ext_view, vg, vo, has_motion, prev_vo, st, depth_tex) in self.view_query.iter_manual(world) {
                 if ext_view.retained_view_entity == *retained_view_entity {
-                    view_entity_opt = Some((v_entity, vg, vo, has_motion, prev_vo, st));
+                    view_entity_opt = Some((v_entity, vg, vo, has_motion, prev_vo, st, depth_tex));
                     break;
                 }
             }
-            let (view_bind_group, view_offset, has_motion_vector_prepass, previous_view_offset, sort_trigger) =
+            let (view_bind_group, view_offset, has_motion_vector_prepass, previous_view_offset, sort_trigger, view_depth_texture) =
                 match view_entity_opt {
-                    Some((_, vg, vo, has_motion, prev_vo, st)) => (vg, vo, has_motion, prev_vo, st),
+                    Some((_, vg, vo, has_motion, prev_vo, st, depth_tex)) => (vg, vo, has_motion, prev_vo, st, depth_tex),
                     None => continue,
                 };
             // View bind group expects 2 dynamic offsets: ViewUniform (binding 0), PreviousViewData (binding 2).
@@ -282,6 +282,19 @@ where
                 LoadOp::Load
             };
 
+            let depth_view = view_depth_texture
+                .map(|depth_tex| depth_tex.texture.create_view(&Default::default()));
+            let depth_stencil_attachment = depth_view.as_ref().map(|dv| {
+                RenderPassDepthStencilAttachment {
+                    view: dv,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }
+            });
+
             let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
                 label: Some("oit_accum"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -293,7 +306,7 @@ where
                         store: StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -335,10 +348,7 @@ where
                     pass.set_bind_group(3, &sort_bind_group.sorted_bind_group, &[]);
                 }
 
-                #[cfg(feature = "webgl2")]
                 pass.draw(0..4, 0..gpu_cloud.len() as u32);
-                #[cfg(not(feature = "webgl2"))]
-                pass.draw_indirect(gpu_cloud.draw_indirect_buffer(), 0);
             }
         }
 
@@ -560,6 +570,10 @@ pub fn init_oit_resolve_pipeline(
 
 use crate::render::OIT_RESOLVE_SHADER_HANDLE;
 
+fn clear_view_oit_items(mut view_oit_items: ResMut<ViewOitItems>) {
+    view_oit_items.items.clear();
+}
+
 /// Registers OIT render graph nodes (accum for 3d/4d + resolve) and resources.
 /// Added after RenderPipelinePlugin for both Gaussian3d and Gaussian4d.
 pub struct OitRenderGraphPlugin;
@@ -574,6 +588,13 @@ impl Plugin for OitRenderGraphPlugin {
             .init_resource::<ViewOitSettingsBuffers>()
             .init_resource::<DefaultOitSettingsBuffer>()
             .insert_resource(OitResolveShaderHandle(OIT_RESOLVE_SHADER_HANDLE.clone()))
+            .add_systems(
+                Render,
+                clear_view_oit_items
+                    .in_set(bevy::render::RenderSystems::Queue)
+                    .before(render::queue_gaussians::<Gaussian3d>)
+                    .before(render::queue_gaussians::<Gaussian4d>),
+            )
             .add_systems(
                 Render,
                 prepare_view_oit_settings
