@@ -129,6 +129,7 @@ where
         #[cfg(feature = "sort_std")]
         app.add_plugins(std_sort::StdSortPlugin::<R>::default());
 
+        app.add_systems(Update, oit_identity_fill::<R>);
         app.add_systems(Update, auto_insert_sorted_entries::<R>);
 
         if app.is_plugin_added::<SortPluginFlag>() {
@@ -379,6 +380,57 @@ impl From<SortedEntriesHandle> for AssetId<SortedEntries> {
 impl From<&SortedEntriesHandle> for AssetId<SortedEntries> {
     fn from(handle: &SortedEntriesHandle) -> Self {
         handle.0.id()
+    }
+}
+
+/// Writes identity entries (key=1, value=idx) for all OIT-mode clouds.
+/// This ensures the sort buffer contains valid identity indices and is not
+/// polluted by stale radix results (key=0xFFFFFFFF for culled splats).
+/// Runs every frame for OIT clouds (cheap O(n) memset, no sorting needed).
+pub fn oit_identity_fill<R: PlanarSync>(
+    asset_server: Res<AssetServer>,
+    gaussian_clouds_res: Res<Assets<R::PlanarType>>,
+    gaussian_clouds: Query<(
+        &R::PlanarTypeHandle,
+        &SortedEntriesHandle,
+        &CloudSettings,
+    )>,
+    mut sorted_entries_res: ResMut<Assets<SortedEntries>>,
+    cameras: Query<&SortTrigger, (With<GaussianCamera>, Without<ShareSort>)>,
+) where
+    R::PlanarType: CommonCloud,
+{
+    for trigger in cameras.iter() {
+        for (gaussian_cloud_handle, sorted_entries_handle, settings) in gaussian_clouds.iter() {
+            if settings.sort_mode != SortMode::Oit {
+                continue;
+            }
+
+            if let Some(load_state) = asset_server.get_load_state(gaussian_cloud_handle.handle())
+                && load_state.is_loading()
+            {
+                continue;
+            }
+
+            if let Some(load_state) = asset_server.get_load_state(&sorted_entries_handle.0)
+                && load_state.is_loading()
+            {
+                continue;
+            }
+
+            if let Some(gaussian_cloud) = gaussian_clouds_res.get(gaussian_cloud_handle.handle())
+                && let Some(sorted_entries) = sorted_entries_res.get_mut(sorted_entries_handle)
+            {
+                let gaussians = gaussian_cloud.len();
+                let mut chunks = sorted_entries.sorted.chunks_mut(gaussians);
+                if let Some(chunk) = chunks.nth(trigger.camera_index) {
+                    for (idx, entry) in chunk.iter_mut().enumerate() {
+                        entry.key = 1;
+                        entry.index = idx as u32;
+                    }
+                }
+            }
+        }
     }
 }
 

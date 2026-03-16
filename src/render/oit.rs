@@ -83,17 +83,18 @@ fn debug_log(_hypothesis_id: &str, _location: &str, _message: &str, _data: serde
 #[reflect(Component)]
 pub struct OitSettings {
     /// Scale for depth-based weight: `1.0 / (1.0 + view_depth * depth_weight_scale)`.
-    /// Higher values favor closer fragments more (default: `0.01`).
+    /// Higher values favor closer fragments more. With gaussian splatting, a value
+    /// of 0.5–2.0 gives strong near/far discrimination (default: `1.0`).
     pub depth_weight_scale: f32,
-    /// Minimum fragment weight to avoid division issues in resolve (default: `1e-3`).
+    /// Minimum fragment weight to avoid division issues in resolve (default: `1e-4`).
     pub min_weight: f32,
 }
 
 impl Default for OitSettings {
     fn default() -> Self {
         Self {
-            depth_weight_scale: 0.01,
-            min_weight: 1e-3,
+            depth_weight_scale: 1.0,
+            min_weight: 1e-4,
         }
     }
 }
@@ -225,8 +226,8 @@ pub fn prepare_view_oit_settings(
             mapped_at_creation: false,
         });
         let default_uniform = OitSettingsUniform {
-            depth_weight_scale: 0.01,
-            min_weight: 1e-3,
+            depth_weight_scale: 1.0,
+            min_weight: 1e-4,
             _pad: Vec2::ZERO,
         };
         render_queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&default_uniform));
@@ -235,8 +236,8 @@ pub fn prepare_view_oit_settings(
 
     for (entity, oit) in &views {
         let uniform = OitSettingsUniform {
-            depth_weight_scale: oit.map(|s| s.depth_weight_scale).unwrap_or(0.01),
-            min_weight: oit.map(|s| s.min_weight).unwrap_or(1e-3),
+            depth_weight_scale: oit.map(|s| s.depth_weight_scale).unwrap_or(1.0),
+            min_weight: oit.map(|s| s.min_weight).unwrap_or(1e-4),
             _pad: Vec2::ZERO,
         };
         let buffer = buffers.buffers.entry(entity).or_insert_with(|| {
