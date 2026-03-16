@@ -1,4 +1,5 @@
 #![allow(dead_code)] // ShaderType derives emit unused check helpers
+use std::any::TypeId;
 use std::{borrow::Cow, hash::Hash, num::NonZero};
 
 use bevy::render::render_resource::TextureFormat;
@@ -40,6 +41,7 @@ use bevy_interleave::prelude::*;
 
 #[cfg(feature = "buffer_storage")]
 use crate::sort::SortEntry;
+use crate::gaussian::formats::planar_3d::Gaussian3d;
 use crate::{
     camera::GaussianCamera,
     gaussian::{
@@ -65,6 +67,8 @@ mod planar;
 #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
 mod texture;
 
+pub mod oit;
+
 const BINDINGS_SHADER_HANDLE: Handle<Shader> = uuid_handle!("cfd9a3d9-a0cb-40c8-ab0b-073110a02474");
 const GAUSSIAN_SHADER_HANDLE: Handle<Shader> = uuid_handle!("9a18d83b-137d-4f44-9628-e2defc4b62b0");
 const GAUSSIAN_2D_SHADER_HANDLE: Handle<Shader> =
@@ -79,6 +83,8 @@ const PLANAR_SHADER_HANDLE: Handle<Shader> = uuid_handle!("d6a3f978-f795-4786-84
 const TEXTURE_SHADER_HANDLE: Handle<Shader> = uuid_handle!("500e2ebf-51a8-402e-9c88-e0d5152c3486");
 const TRANSFORM_SHADER_HANDLE: Handle<Shader> =
     uuid_handle!("648516b2-87cc-4937-ae1c-d986952e9fa7");
+pub const OIT_RESOLVE_SHADER_HANDLE: Handle<Shader> =
+    uuid_handle!("b8c4d5e6-f7a8-4901-bcde-f23456789012");
 
 // TODO: consider refactor to bind via bevy's mesh (dynamic vertex planes) + shared batching/instancing/preprocessing
 //       utilize RawBufferVec<T> for gaussian data?
@@ -202,6 +208,13 @@ where
             Shader::from_wgsl
         );
 
+        load_internal_asset!(
+            app,
+            OIT_RESOLVE_SHADER_HANDLE,
+            "oit_resolve.wgsl",
+            Shader::from_wgsl
+        );
+
         app.add_plugins(UniformComponentPlugin::<CloudUniform>::default());
 
         #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
@@ -217,11 +230,19 @@ where
     }
 }
 
-/// Per-view list of (render_entity, pipeline_key) for OIT. When a view has OIT items,
-/// gaussians are drawn in the OIT node (accum + resolve) instead of Transparent3d.
+/// Per-view OIT lists per format (3d, 4d). Pipeline IDs are pre-computed in queue_gaussians
+/// so the OIT node only needs read-only access. When a view has OIT items, gaussians are
+/// drawn in the OIT node (accum + resolve) instead of Transparent3d.
 #[derive(Resource, Default)]
 pub struct ViewOitItems {
-    pub items: std::collections::HashMap<RetainedViewEntity, Vec<(Entity, CloudPipelineKey)>>,
+    /// (list_3d, list_4d); each list is (entity, cached_pipeline_id).
+    pub items: std::collections::HashMap<
+        RetainedViewEntity,
+        (
+            Vec<(Entity, CachedRenderPipelineId)>,
+            Vec<(Entity, CachedRenderPipelineId)>,
+        ),
+    >,
 }
 
 #[derive(Resource)]
@@ -379,7 +400,11 @@ fn queue_gaussians<R: PlanarSync>(
         .read()
         .id::<DrawGaussians<R>>();
 
-    view_oit_items.items.clear();
+    let oit_list_idx = if TypeId::of::<R>() == TypeId::of::<Gaussian3d>() {
+        0
+    } else {
+        1
+    };
 
     for (view, _, visible_entities, msaa) in &mut views {
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
@@ -400,7 +425,17 @@ fn queue_gaussians<R: PlanarSync>(
             }
         }
 
-        let mut oit_list_for_view = Vec::new();
+        if view_uses_oit {
+            let lists = view_oit_items
+                .items
+                .entry(view.retained_view_entity)
+                .or_insert_with(|| (Vec::new(), Vec::new()));
+            if oit_list_idx == 0 {
+                lists.0.clear();
+            } else {
+                lists.1.clear();
+            }
+        }
 
         for (render_entity, visible_entity) in visible_entities.iter::<CloudVisibilityClass>() {
             let Ok((_entity, cloud_handle, aabb, sorted_entries_handle, settings, transform)) =
@@ -416,6 +451,7 @@ fn queue_gaussians<R: PlanarSync>(
             }
 
             let msaa = msaa.cloned().unwrap_or_default();
+            let is_oit = settings.sort_mode == SortMode::Oit;
 
             let key = CloudPipelineKey {
                 aabb: settings.aabb,
@@ -427,17 +463,20 @@ fn queue_gaussians<R: PlanarSync>(
                 rasterize_mode: settings.rasterize_mode,
                 sample_count: msaa.samples(),
                 hdr: view.hdr,
-                oit: settings.sort_mode == SortMode::Oit,
+                oit: is_oit,
             };
 
             let pipeline = pipelines.specialize(&pipeline_cache, &custom_pipeline, key);
 
-            if view_uses_oit {
-                oit_list_for_view.push((*render_entity, key));
+            if view_uses_oit && is_oit {
+                let lists = view_oit_items.items.get_mut(&view.retained_view_entity).unwrap();
+                if oit_list_idx == 0 {
+                    lists.0.push((*render_entity, pipeline));
+                } else {
+                    lists.1.push((*render_entity, pipeline));
+                }
+                continue;
             }
-            // When OIT: still add to Transparent3d so gaussians are drawn (additive blend, no resolve yet).
-            // TODO: when OIT node is added, skip adding to Transparent3d and draw via OIT node (accum + resolve).
-
             let rangefinder = view.rangefinder3d();
             let aabb_center = (aabb.min() + aabb.max()) / 2.0;
             let aabb_size = aabb.max() - aabb.min();
@@ -458,11 +497,6 @@ fn queue_gaussians<R: PlanarSync>(
             });
         }
 
-        if view_uses_oit && !oit_list_for_view.is_empty() {
-            view_oit_items
-                .items
-                .insert(view.retained_view_entity, oit_list_for_view);
-        }
     }
 }
 

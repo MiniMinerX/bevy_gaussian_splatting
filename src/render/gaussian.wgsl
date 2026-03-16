@@ -134,12 +134,21 @@
         @location(4) local_to_pixel_w: vec3<f32>,
         @location(5) mean_2d: vec2<f32>,
         @location(6) radius: vec2<f32>,
+        #ifdef USE_OIT
+        @location(7) @interpolate(linear) view_depth: f32,
+        #endif
     #else #ifdef GAUSSIAN_3D
         @location(2) conic: vec3<f32>,
         @location(3) major_minor: vec2<f32>,
+        #ifdef USE_OIT
+        @location(4) @interpolate(linear) view_depth: f32,
+        #endif
     #else #ifdef GAUSSIAN_4D
         @location(2) conic: vec3<f32>,
         @location(3) major_minor: vec2<f32>,
+        #ifdef USE_OIT
+        @location(4) @interpolate(linear) view_depth: f32,
+        #endif
     #endif
     };
 #else
@@ -153,12 +162,21 @@
         @location(4) @interpolate(flat) local_to_pixel_w: vec3<f32>,
         @location(5) @interpolate(flat) mean_2d: vec2<f32>,
         @location(6) @interpolate(flat) radius: vec2<f32>,
+        #ifdef USE_OIT
+        @location(7) @interpolate(linear) view_depth: f32,
+        #endif
     #else ifdef GAUSSIAN_3D
         @location(2) @interpolate(flat) conic: vec3<f32>,
         @location(3) @interpolate(linear) major_minor: vec2<f32>,
+        #ifdef USE_OIT
+        @location(4) @interpolate(linear) view_depth: f32,
+        #endif
     #else ifdef GAUSSIAN_4D
         @location(2) @interpolate(flat) conic: vec3<f32>,
         @location(3) @interpolate(linear) major_minor: vec2<f32>,
+        #ifdef USE_OIT
+        @location(4) @interpolate(linear) view_depth: f32,
+        #endif
     #endif
     };
 #endif
@@ -213,6 +231,9 @@ fn vs_points(
     if (discard_quad) {
         output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+#ifdef USE_OIT
+        output.view_depth = 0.0;
+#endif
         return output;
     }
 
@@ -268,6 +289,9 @@ fn vs_points(
         if !gaussian_4d.mask {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+#ifdef USE_OIT
+            output.view_depth = 0.0;
+#endif
             return output;
         }
 
@@ -279,6 +303,9 @@ fn vs_points(
         if !in_frustum(projected_position.xyz) {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+#ifdef USE_OIT
+            output.view_depth = 0.0;
+#endif
             return output;
         }
 
@@ -432,6 +459,11 @@ fn vs_points(
         projected_position.zw,
     );
 
+#ifdef USE_OIT
+    let view_pos = view.view_from_world * vec4<f32>(transformed_position, 1.0);
+    output.view_depth = -view_pos.z;
+#endif
+
     return output;
 }
 
@@ -500,12 +532,14 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
 
 #ifdef USE_OIT
     // Weighted blended OIT: output (accum_rgb, accum_weight) for additive accumulation.
+    // This output MUST be rendered to a dedicated accum texture and then resolved (accum.rgb/weight, min(weight,1))
+    // in a separate pass. Drawing this directly to the main target produces wrong (white/whispy) results.
     // Weight from "Weighted Blended OIT" (McGuire & Bavoil): reduces contribution of near-opaque fragments.
-    // Note: When using Rgba16Float (HDR mode), precision is reduced. Using a slightly higher
-    // minimum weight helps maintain quality with lower precision formats.
-    // Optimized: use multiplication instead of pow() for x^2
+    // Depth weighting favors closer fragments (1/(1 + depth*scale)) so ordering is less critical.
     let alpha_factor = 1.0 - 0.5 * alpha;
-    let weight = max(1e-1, alpha_factor * alpha_factor);
+    var weight = max(1e-3, alpha_factor * alpha_factor);
+    let depth_weight = 1.0 / (1.0 + input.view_depth * 0.01);
+    weight *= depth_weight;
     let premul = input.color.rgb * alpha;
     return vec4<f32>(premul * weight, weight);
 #else

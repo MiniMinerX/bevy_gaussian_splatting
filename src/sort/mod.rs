@@ -48,6 +48,8 @@ pub enum SortMode {
     None,
 
     /// Order-independent transparency: no sort, identity indices, weighted blended accumulation + resolve.
+    /// Frustum culling still runs per-vertex using the current view; no per-frame sort runs.
+    /// You do not need to train for OIT — same splats and opacities as depth-sorted rendering.
     Oit,
 
     #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
@@ -182,6 +184,11 @@ pub struct SortTrigger {
 /// avoid redundant sort passes.
 ///
 /// The `sort_cam` entity must be a camera with [`GaussianCamera`] that does NOT have `ShareSort`.
+///
+/// **OIT views:** When a view uses [`SortMode::Oit`], no radix sort runs for that view (identity
+/// order is used). ShareSort still applies: the view's [`SortTrigger::camera_index`] is copied
+/// from the source camera, so both use the same slice of the sort buffer (identity indices).
+/// There is no "sort order" to share in that case; sharing only affects which buffer slice is used.
 #[derive(Component, ExtractComponent, Debug, Clone, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct ShareSort {

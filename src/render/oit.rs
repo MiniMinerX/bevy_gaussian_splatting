@@ -1,0 +1,474 @@
+//! Order-independent transparency (OIT) render path: accum texture + fullscreen resolve.
+//! Avoids per-frame sorting; uses weighted blended OIT (McGuire & Bavoil) with Rgba32Float accum.
+
+use std::any::TypeId;
+use std::collections::HashMap;
+
+use bevy::{
+    core_pipeline::core_3d::graph::{Core3d, Node3d},
+    ecs::query::QueryItem,
+    prelude::*,
+    render::{
+        extract_component::DynamicUniformIndex,
+        render_asset::RenderAssets,
+        render_graph::{
+            Node, NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode,
+            ViewNodeRunner,
+        },
+        render_resource::*,
+        renderer::{RenderContext, RenderDevice},
+        view::{ViewTarget, ViewUniformOffset},
+        Render, RenderApp, RenderStartup,
+    },
+};
+use bevy_interleave::prelude::*;
+
+use crate::gaussian::formats::{planar_3d::Gaussian3d, planar_4d::Gaussian4d};
+#[cfg(feature = "buffer_storage")]
+use crate::sort::SortEntry;
+use crate::camera::GaussianCamera;
+use crate::render::{
+    CloudPipeline, CloudUniform, GaussianUniformBindGroups, GaussianViewBindGroup,
+    PlanarStorageBindGroup, SortBindGroup, ViewOitItems,
+};
+use crate::sort::SortTrigger;
+use bevy::render::view::ExtractedView;
+
+/// OIT accumulation pass: draw gaussians to accum texture (additive).
+/// One label per format so we can order 3d before 4d (3d clears, 4d additive).
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct OitAccumLabel3d;
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct OitAccumLabel4d;
+
+/// OIT resolve pass: fullscreen resolve + composite over scene.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct OitResolveLabel;
+
+/// Per-view OIT accumulation texture (Rgba32Float for precision).
+/// Keyed by RetainedViewEntity to match ViewOitItems.
+#[derive(Resource, Default)]
+pub struct OitTextureCache {
+    pub cache: HashMap<bevy::render::view::RetainedViewEntity, OitTextureEntry>,
+}
+
+pub struct OitTextureEntry {
+    pub texture: Texture,
+    pub view: TextureView,
+    pub size: (u32, u32),
+}
+
+/// Handle for the OIT resolve shader (set when loading the shader).
+#[derive(Resource)]
+pub struct OitResolveShaderHandle(pub Handle<Shader>);
+
+/// Pipeline and layout for the OIT resolve fullscreen pass.
+#[derive(Resource)]
+pub struct OitResolvePipeline {
+    pub layout: BindGroupLayout,
+    pub pipeline_id: CachedRenderPipelineId,
+    pub sampler: Sampler,
+}
+
+pub struct OitAccumNode<R: PlanarSync> {
+    view_query: QueryState<(
+        Entity,
+        &'static ExtractedView,
+        &'static GaussianViewBindGroup,
+        &'static ViewUniformOffset,
+        &'static SortTrigger,
+    ), With<GaussianCamera>>,
+    cloud_query: QueryState<(
+        Entity,
+        &'static R::PlanarTypeHandle,
+        &'static PlanarStorageBindGroup<R>,
+        &'static SortBindGroup,
+        &'static DynamicUniformIndex<CloudUniform>,
+    )>,
+    _phantom: std::marker::PhantomData<R>,
+}
+
+impl<R: PlanarSync> OitAccumNode<R> {
+    pub fn new(world: &mut World) -> Self {
+        Self {
+            view_query: QueryState::new(world),
+            cloud_query: QueryState::new(world),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+
+impl<R: PlanarSync> FromWorld for OitAccumNode<R> {
+    fn from_world(world: &mut World) -> Self {
+        Self::new(world)
+    }
+}
+
+impl<R: PlanarSync> Node for OitAccumNode<R>
+where
+    R::GpuPlanarType: GpuPlanarStorage,
+{
+    fn update(&mut self, world: &mut World) {
+        self.view_query.update_archetypes(world);
+        self.cloud_query.update_archetypes(world);
+    }
+
+    fn run(
+        &self,
+        _graph: &mut RenderGraphContext,
+        render_context: &mut RenderContext,
+        world: &World,
+    ) -> Result<(), NodeRunError> {
+        let view_oit_items = match world.get_resource::<ViewOitItems>() {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        if view_oit_items.items.is_empty() {
+            return Ok(());
+        }
+
+        let oit_cache = match world.get_resource::<OitTextureCache>() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let gaussian_uniforms = world.resource::<GaussianUniformBindGroups>();
+        let gaussian_clouds = world.resource::<RenderAssets<R::GpuPlanarType>>();
+        let oit_list_idx = if TypeId::of::<R>() == TypeId::of::<Gaussian3d>() {
+            0
+        } else {
+            1
+        };
+        for (retained_view_entity, lists) in &view_oit_items.items {
+            let oit_list = if oit_list_idx == 0 { &lists.0 } else { &lists.1 };
+            if oit_list.is_empty() {
+                continue;
+            }
+            let entry = match oit_cache.cache.get(retained_view_entity) {
+                Some(e) => e,
+                None => continue,
+            };
+            // Find the render-world view entity that has this retained view entity.
+            let mut view_entity_opt = None;
+            for (v_entity, ext_view, vg, vo, st) in self.view_query.iter_manual(world) {
+                if ext_view.retained_view_entity == *retained_view_entity {
+                    view_entity_opt = Some((v_entity, vg, vo, st));
+                    break;
+                }
+            }
+            let (view_bind_group, view_offset, sort_trigger) = match view_entity_opt {
+                Some((_, vg, vo, st)) => (vg, vo, st),
+                None => continue,
+            };
+
+            // Clear on first OIT accum node (3d); 4d and others additive on top.
+            let clear_on_run = TypeId::of::<R>() == TypeId::of::<Gaussian3d>();
+            let load_op = if clear_on_run {
+                LoadOp::Clear(LinearRgba::new(0.0, 0.0, 0.0, 0.0).into())
+            } else {
+                LoadOp::Load
+            };
+
+            let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                label: Some("oit_accum"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &entry.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: Operations {
+                        load: load_op,
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            let Some(base_uniform) = gaussian_uniforms.base_bind_group.as_ref() else {
+                continue;
+            };
+
+            for (cloud_entity, pipeline_id) in oit_list.iter() {
+                let Ok((_, handle, planar_bind_group, sort_bind_group, uniform_index)) =
+                    self.cloud_query.get_manual(world, *cloud_entity)
+                else {
+                    continue;
+                };
+
+                let gpu_cloud = match gaussian_clouds.get(handle.handle()) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                let Some(pipeline) = pipeline_cache.get_render_pipeline(*pipeline_id) else {
+                    continue;
+                };
+
+                pass.set_render_pipeline(pipeline);
+                pass.set_bind_group(0, &view_bind_group.value, &[view_offset.offset]);
+                pass.set_bind_group(1, base_uniform, &[uniform_index.index()]);
+                pass.set_bind_group(2, &planar_bind_group.bind_group, &[]);
+
+                #[cfg(feature = "buffer_storage")]
+                {
+                    let sort_offset = sort_trigger.camera_index as u32
+                        * std::mem::size_of::<SortEntry>() as u32
+                        * gpu_cloud.len() as u32;
+                    pass.set_bind_group(3, &sort_bind_group.sorted_bind_group, &[sort_offset]);
+                }
+                #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
+                {
+                    pass.set_bind_group(3, &sort_bind_group.sorted_bind_group, &[]);
+                }
+
+                #[cfg(feature = "webgl2")]
+                pass.draw(0..4, 0..gpu_cloud.len() as u32);
+                #[cfg(not(feature = "webgl2"))]
+                pass.draw_indirect(gpu_cloud.draw_indirect_buffer(), 0);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// ViewNode that runs the OIT resolve (sample accum, resolve, composite over scene).
+#[derive(Default)]
+pub struct OitResolveNode;
+
+impl ViewNode for OitResolveNode {
+    type ViewQuery = (
+        Entity,
+        &'static ExtractedView,
+        &'static ViewTarget,
+    );
+
+    fn run(
+        &self,
+        _graph: &mut RenderGraphContext,
+        render_context: &mut RenderContext,
+        (_view_entity, extracted_view, view_target): QueryItem<Self::ViewQuery>,
+        world: &World,
+    ) -> Result<(), NodeRunError> {
+        let view_oit_items = match world.get_resource::<ViewOitItems>() {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        if !view_oit_items.items.contains_key(&extracted_view.retained_view_entity) {
+            return Ok(());
+        }
+
+        let oit_cache = match world.get_resource::<OitTextureCache>() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let entry = match oit_cache.cache.get(&extracted_view.retained_view_entity) {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+
+        let resolve_pipeline = world.resource::<OitResolvePipeline>();
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(resolve_pipeline.pipeline_id) else {
+            return Ok(());
+        };
+
+        let post_process = view_target.post_process_write();
+
+        let bind_group = render_context.render_device().create_bind_group(
+            Some("oit_resolve_bind_group"),
+            &resolve_pipeline.layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(post_process.source),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&entry.view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(&resolve_pipeline.sampler),
+                },
+            ],
+        );
+
+        let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+            label: Some("oit_resolve"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: post_process.destination,
+                resolve_target: None,
+                depth_slice: None,
+                ops: Operations::default(),
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        pass.set_render_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+
+        Ok(())
+    }
+}
+
+/// Creates or resizes OIT accum textures for each view that has OIT items.
+/// Must run before the OIT accum node (in Render schedule).
+pub fn prepare_oit_textures(
+    mut oit_cache: ResMut<OitTextureCache>,
+    view_oit_items: Res<ViewOitItems>,
+    views: Query<(Entity, &ExtractedView, &ViewTarget), With<GaussianCamera>>,
+    render_device: Res<RenderDevice>,
+) {
+    for (_view_entity, ext_view, view_target) in &views {
+        if !view_oit_items.items.contains_key(&ext_view.retained_view_entity) {
+            continue;
+        }
+        let (width, height) = {
+            let tex = view_target.main_texture();
+            (tex.size().width, tex.size().height)
+        };
+        if width == 0 || height == 0 {
+            continue;
+        }
+        let entry = oit_cache.cache.entry(ext_view.retained_view_entity).or_insert_with(|| {
+            let desc = TextureDescriptor {
+                label: Some("oit_accum"),
+                size: Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            };
+            let texture = render_device.create_texture(&desc);
+            let view = texture.create_view(&Default::default());
+            OitTextureEntry {
+                texture,
+                view,
+                size: (width, height),
+            }
+        });
+        if entry.size.0 != width || entry.size.1 != height {
+            let desc = TextureDescriptor {
+                label: Some("oit_accum"),
+                size: Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            };
+            entry.texture = render_device.create_texture(&desc);
+            entry.view = entry.texture.create_view(&Default::default());
+            entry.size = (width, height);
+        }
+    }
+}
+
+pub fn init_oit_resolve_pipeline(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    pipeline_cache: ResMut<PipelineCache>,
+    shader_handle: Res<OitResolveShaderHandle>,
+) {
+    let layout_entries = [
+        BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 1,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 2,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Sampler(SamplerBindingType::Filtering),
+            count: None,
+        },
+    ];
+    let layout_desc = BindGroupLayoutDescriptor::new("oit_resolve_layout", &layout_entries);
+    let layout = render_device.create_bind_group_layout(Some("oit_resolve_layout"), &layout_entries);
+
+    let shader = shader_handle.0.clone();
+    let pipeline_id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: Some("oit_resolve".into()),
+        layout: vec![layout_desc],
+        vertex: VertexState {
+            shader: shader.clone(),
+            shader_defs: vec![],
+            entry_point: Some("vs_fullscreen".into()),
+            buffers: vec![],
+        },
+        fragment: Some(FragmentState {
+            shader,
+            entry_point: Some("fs_resolve".into()),
+            targets: vec![Some(ColorTargetState {
+                format: TextureFormat::Rgba16Float,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+            ..default()
+        }),
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        push_constant_ranges: vec![],
+        ..default()
+    });
+
+    let sampler = render_device.create_sampler(&SamplerDescriptor::default());
+
+    commands.insert_resource(OitResolvePipeline {
+        layout,
+        pipeline_id,
+        sampler,
+    });
+}
+
+use crate::render::OIT_RESOLVE_SHADER_HANDLE;
+
+/// Registers OIT render graph nodes (accum for 3d/4d + resolve) and resources.
+/// Added after RenderPipelinePlugin for both Gaussian3d and Gaussian4d.
+pub struct OitRenderGraphPlugin;
+
+impl Plugin for OitRenderGraphPlugin {
+    fn build(&self, app: &mut App) {
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+        render_app
+            .init_resource::<OitTextureCache>()
+            .insert_resource(OitResolveShaderHandle(OIT_RESOLVE_SHADER_HANDLE.clone()))
+            .add_systems(Render, prepare_oit_textures)
+            .add_systems(RenderStartup, init_oit_resolve_pipeline)
+            .add_render_graph_node::<OitAccumNode<Gaussian3d>>(Core3d, OitAccumLabel3d)
+            .add_render_graph_node::<OitAccumNode<Gaussian4d>>(Core3d, OitAccumLabel4d)
+            .add_render_graph_node::<ViewNodeRunner<OitResolveNode>>(Core3d, OitResolveLabel)
+            .add_render_graph_edge(Core3d, Node3d::MainOpaquePass, OitAccumLabel3d)
+            .add_render_graph_edge(Core3d, OitAccumLabel3d, OitAccumLabel4d)
+            .add_render_graph_edge(Core3d, OitAccumLabel4d, Node3d::MainTransparentPass)
+            .add_render_graph_edge(Core3d, Node3d::MainTransparentPass, OitResolveLabel)
+            .add_render_graph_edge(Core3d, OitResolveLabel, Node3d::EndMainPass);
+    }
+}

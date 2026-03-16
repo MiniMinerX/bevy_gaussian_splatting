@@ -71,6 +71,7 @@ impl Plugin for GaussianSplattingPlugin {
         app.add_plugins((
             render::RenderPipelinePlugin::<Gaussian3d>::default(),
             render::RenderPipelinePlugin::<Gaussian4d>::default(),
+            render::oit::OitRenderGraphPlugin,
         ));
 
         app.add_plugins((material::MaterialPlugin, query::QueryPlugin));
