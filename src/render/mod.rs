@@ -1466,18 +1466,31 @@ pub fn queue_gaussian_compute_view_bind_groups<R: PlanarSync>(
 pub struct SetViewBindGroup<const I: usize>;
 impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
     type Param = ();
-    type ViewQuery = (Read<GaussianViewBindGroup>, Read<ViewUniformOffset>);
+    type ViewQuery = (
+        Read<GaussianViewBindGroup>,
+        Read<ViewUniformOffset>,
+        Option<Read<PreviousViewUniformOffset>>,
+    );
     type ItemQuery = ();
 
     #[inline]
     fn render<'w>(
         _: &P,
-        (gaussian_view_bind_group, view_uniform): ROQueryItem<'w, 'w, Self::ViewQuery>,
+        (gaussian_view_bind_group, view_uniform, previous_view_uniform): ROQueryItem<
+            'w,
+            'w',
+            Self::ViewQuery,
+        >,
         _entity: Option<()>,
         _: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        pass.set_bind_group(I, &gaussian_view_bind_group.value, &[view_uniform.offset]);
+        // View bind group has 2 dynamic offset bindings: ViewUniform (0), PreviousViewData (2).
+        let dynamic_offsets = [
+            view_uniform.offset,
+            previous_view_uniform.map(|p| p.offset).unwrap_or(0),
+        ];
+        pass.set_bind_group(I, &gaussian_view_bind_group.value, &dynamic_offsets);
 
         debug!("set view bind group");
 
