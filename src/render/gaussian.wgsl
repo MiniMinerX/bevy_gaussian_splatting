@@ -231,7 +231,7 @@ fn vs_points(
 
     if (discard_quad) {
         output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 #ifdef USE_OIT
         output.view_depth = 0.0;
 #endif
@@ -289,7 +289,7 @@ fn vs_points(
 
         if !gaussian_4d.mask {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 #ifdef USE_OIT
             output.view_depth = 0.0;
 #endif
@@ -303,7 +303,7 @@ fn vs_points(
 
         if !in_frustum(projected_position.xyz) {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 #ifdef USE_OIT
             output.view_depth = 0.0;
 #endif

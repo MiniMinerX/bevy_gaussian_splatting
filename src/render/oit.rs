@@ -444,15 +444,29 @@ impl ViewNode for OitResolveNode {
 pub fn prepare_oit_textures(
     mut oit_cache: ResMut<OitTextureCache>,
     view_oit_items: Res<ViewOitItems>,
-    views: Query<(Entity, &ExtractedView, &ViewTarget), With<GaussianCamera>>,
+    views: Query<
+        (
+            Entity,
+            &ExtractedView,
+            &ViewTarget,
+            Option<&ViewDepthTexture>,
+        ),
+        With<GaussianCamera>,
+    >,
     render_device: Res<RenderDevice>,
 ) {
-    for (_view_entity, ext_view, view_target) in &views {
+    oit_cache
+        .cache
+        .retain(|retained_view_entity, _| view_oit_items.items.contains_key(retained_view_entity));
+
+    for (_view_entity, ext_view, view_target, view_depth_texture) in &views {
         if !view_oit_items.items.contains_key(&ext_view.retained_view_entity) {
             continue;
         }
         let (width, height) = {
-            let tex = view_target.main_texture();
+            let tex = view_depth_texture
+                .map(|depth| &depth.texture)
+                .unwrap_or_else(|| view_target.main_texture());
             (tex.size().width, tex.size().height)
         };
         if width == 0 || height == 0 {
@@ -602,7 +616,13 @@ impl Plugin for OitRenderGraphPlugin {
                     .before(render::queue_gaussian_view_bind_groups::<Gaussian3d>)
                     .before(render::queue_gaussian_compute_view_bind_groups::<Gaussian3d>),
             )
-            .add_systems(Render, prepare_oit_textures)
+            .add_systems(
+                Render,
+                prepare_oit_textures
+                    .in_set(bevy::render::RenderSystems::Queue)
+                    .after(render::queue_gaussians::<Gaussian3d>)
+                    .after(render::queue_gaussians::<Gaussian4d>),
+            )
             .add_systems(RenderStartup, init_oit_resolve_pipeline)
             .add_render_graph_node::<OitAccumNode<Gaussian3d>>(Core3d, OitAccumLabel3d)
             .add_render_graph_node::<OitAccumNode<Gaussian4d>>(Core3d, OitAccumLabel4d)
