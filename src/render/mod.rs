@@ -1335,11 +1335,23 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
         return;
     };
 
+    let resources_changed = gaussian_cloud_pipeline.is_changed()
+        || view_uniforms.is_changed()
+        || previous_view_uniforms.is_changed()
+        || globals_buffer.is_changed()
+        || visibility_ranges.is_changed()
+        || view_oit_buffers.is_changed()
+        || default_oit_buffer.is_changed();
+
     let Some(default_oit_buffer_ref) = default_oit_buffer.0.as_ref() else {
         return;
     };
 
-    for (entity, _extracted_view, _maybe_previous_view, _existing_bind_group) in &views {
+    for (entity, _extracted_view, _maybe_previous_view, existing_bind_group) in &views {
+        if !resources_changed && existing_bind_group.is_some() {
+            continue;
+        }
+
         let layout = &gaussian_cloud_pipeline.view_layout;
 
         let oit_resource = view_oit_buffers
@@ -1419,11 +1431,23 @@ pub fn queue_gaussian_compute_view_bind_groups<R: PlanarSync>(
         return;
     };
 
+    let resources_changed = gaussian_cloud_pipeline.is_changed()
+        || view_uniforms.is_changed()
+        || previous_view_uniforms.is_changed()
+        || globals_buffer.is_changed()
+        || visibility_ranges.is_changed()
+        || view_oit_buffers.is_changed()
+        || default_oit_buffer.is_changed();
+
     let Some(default_oit_buffer_ref) = default_oit_buffer.0.as_ref() else {
         return;
     };
 
-    for (entity, _extracted_view, _maybe_previous_view, _existing_bind_group) in &views {
+    for (entity, _extracted_view, _maybe_previous_view, existing_bind_group) in &views {
+        if !resources_changed && existing_bind_group.is_some() {
+            continue;
+        }
+
         let layout = &gaussian_cloud_pipeline.compute_view_layout;
 
         let oit_resource = view_oit_buffers
