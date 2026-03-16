@@ -29,7 +29,7 @@ use crate::gaussian::formats::{planar_3d::Gaussian3d, planar_4d::Gaussian4d};
 use crate::sort::SortEntry;
 use crate::camera::GaussianCamera;
 use crate::render::{
-    CloudUniform, GaussianUniformBindGroups, GaussianViewBindGroup,
+    self, CloudUniform, GaussianUniformBindGroups, GaussianViewBindGroup,
     PlanarStorageBindGroup, SortBindGroup, ViewOitItems,
 };
 use crate::sort::SortTrigger;
@@ -107,14 +107,35 @@ pub struct ViewOitSettingsBuffers {
     pub buffers: HashMap<Entity, Buffer>,
 }
 
+/// Default OIT settings buffer used as fallback for bind group binding 15 when a view has no per-view buffer yet.
+#[derive(Resource, Default)]
+pub struct DefaultOitSettingsBuffer(pub Option<Buffer>);
+
 /// Writes per-view OIT settings to uniform buffers so the view bind group can bind them.
-/// Run before `queue_gaussian_view_bind_groups`.
+/// Run before `queue_gaussian_view_bind_groups` and `queue_gaussian_compute_view_bind_groups`.
 pub fn prepare_view_oit_settings(
     render_device: Res<RenderDevice>,
     render_queue: Res<bevy::render::renderer::RenderQueue>,
     mut buffers: ResMut<ViewOitSettingsBuffers>,
+    mut default_buffer: ResMut<DefaultOitSettingsBuffer>,
     views: Query<(Entity, Option<&OitSettings>), With<GaussianCamera>>,
 ) {
+    if default_buffer.0.is_none() {
+        let buffer = render_device.create_buffer(&BufferDescriptor {
+            label: Some("oit_settings_default_uniform"),
+            size: OitSettingsUniform::min_size().get(),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let default_uniform = OitSettingsUniform {
+            depth_weight_scale: 0.01,
+            min_weight: 1e-3,
+            _pad: Vec2::ZERO,
+        };
+        render_queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&default_uniform));
+        default_buffer.0 = Some(buffer);
+    }
+
     for (entity, oit) in &views {
         let uniform = OitSettingsUniform {
             depth_weight_scale: oit.map(|s| s.depth_weight_scale).unwrap_or(0.01),
@@ -537,7 +558,15 @@ impl Plugin for OitRenderGraphPlugin {
         };
         render_app
             .init_resource::<OitTextureCache>()
+            .init_resource::<ViewOitSettingsBuffers>()
+            .init_resource::<DefaultOitSettingsBuffer>()
             .insert_resource(OitResolveShaderHandle(OIT_RESOLVE_SHADER_HANDLE.clone()))
+            .add_systems(
+                Render,
+                prepare_view_oit_settings
+                    .in_set(bevy::render::RenderSystems::PrepareBindGroups)
+                    .before(render::queue_gaussian_compute_view_bind_groups::<Gaussian3d>),
+            )
             .add_systems(Render, prepare_oit_textures)
             .add_systems(RenderStartup, init_oit_resolve_pipeline)
             .add_render_graph_node::<OitAccumNode<Gaussian3d>>(Core3d, OitAccumLabel3d)
