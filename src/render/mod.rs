@@ -1022,22 +1022,27 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
                 conservative: false,
                 polygon_mode: PolygonMode::Fill,
             },
-            depth_stencil: Some(DepthStencilState {
-                format: TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::GreaterEqual,
-                stencil: StencilState {
-                    front: StencilFaceState::IGNORE,
-                    back: StencilFaceState::IGNORE,
-                    read_mask: 0,
-                    write_mask: 0,
-                },
-                bias: DepthBiasState {
-                    constant: 0,
-                    slope_scale: 0.0,
-                    clamp: 0.0,
-                },
-            }),
+            // OIT accum pass has no depth attachment; use depth only for non-OIT passes.
+            depth_stencil: if key.oit {
+                None
+            } else {
+                Some(DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: CompareFunction::GreaterEqual,
+                    stencil: StencilState {
+                        front: StencilFaceState::IGNORE,
+                        back: StencilFaceState::IGNORE,
+                        read_mask: 0,
+                        write_mask: 0,
+                    },
+                    bias: DepthBiasState {
+                        constant: 0,
+                        slope_scale: 0.0,
+                        clamp: 0.0,
+                    },
+                })
+            },
             multisample: MultisampleState {
                 count: key.sample_count,
                 mask: !0,
