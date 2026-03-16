@@ -9,7 +9,7 @@ use bevy::{
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        extract_component::{DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin},
+        extract_component::{DynamicUniformIndex, ExtractComponent},
         render_asset::RenderAssets,
         render_graph::{
             Node, NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode,
@@ -29,7 +29,7 @@ use crate::gaussian::formats::{planar_3d::Gaussian3d, planar_4d::Gaussian4d};
 use crate::sort::SortEntry;
 use crate::camera::GaussianCamera;
 use crate::render::{
-    CloudPipeline, CloudUniform, GaussianUniformBindGroups, GaussianViewBindGroup,
+    CloudUniform, GaussianUniformBindGroups, GaussianViewBindGroup,
     PlanarStorageBindGroup, SortBindGroup, ViewOitItems,
 };
 use crate::sort::SortTrigger;
@@ -44,10 +44,8 @@ use bevy::render::view::ExtractedView;
 pub struct OitSettings {
     /// Scale for depth-based weight: `1.0 / (1.0 + view_depth * depth_weight_scale)`.
     /// Higher values favor closer fragments more (default: `0.01`).
-    #[reflect(range(0.0..=0.5))]
     pub depth_weight_scale: f32,
     /// Minimum fragment weight to avoid division issues in resolve (default: `1e-3`).
-    #[reflect(range(0.00001..=0.1))]
     pub min_weight: f32,
 }
 
@@ -65,13 +63,14 @@ impl ExtractComponent for OitSettings {
     type QueryFilter = With<Camera>;
     type Out = Self;
 
-    fn extract_component(settings: QueryItem<'_, Self::QueryData>) -> Option<Self::Out> {
+    fn extract_component(settings: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
         Some(*settings)
     }
 }
 
 /// GPU uniform for OIT settings (must match WGSL layout).
-#[derive(Clone, Copy, ShaderType)]
+#[derive(Clone, Copy, ShaderType, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct OitSettingsUniform {
     pub depth_weight_scale: f32,
     pub min_weight: f32,
@@ -125,12 +124,13 @@ pub fn prepare_view_oit_settings(
         let buffer = buffers.buffers.entry(entity).or_insert_with(|| {
             render_device.create_buffer(&BufferDescriptor {
                 label: Some("oit_settings_uniform"),
-                size: OitSettingsUniform::min_size(),
+                size: OitSettingsUniform::min_size().get(),
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         });
-        render_queue.write_buffer(buffer, 0, bytemuck::bytes_of(&uniform.as_std140()));
+        // Std140 layout for this struct matches repr(C): f32, f32, vec2 = 16 bytes.
+        render_queue.write_buffer(buffer, 0, bytemuck::bytes_of(&uniform));
     }
     // Remove buffers for despawned views
     buffers.buffers.retain(|e, _| views.get(*e).is_ok());
