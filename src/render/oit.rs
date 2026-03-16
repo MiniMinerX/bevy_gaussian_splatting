@@ -9,7 +9,7 @@ use bevy::{
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        extract_component::DynamicUniformIndex,
+        extract_component::{DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin},
         render_asset::RenderAssets,
         render_graph::{
             Node, NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode,
@@ -22,6 +22,7 @@ use bevy::{
     },
 };
 use bevy_interleave::prelude::*;
+use bytemuck;
 
 use crate::gaussian::formats::{planar_3d::Gaussian3d, planar_4d::Gaussian4d};
 #[cfg(feature = "buffer_storage")]
@@ -33,6 +34,49 @@ use crate::render::{
 };
 use crate::sort::SortTrigger;
 use bevy::render::view::ExtractedView;
+
+// --- OIT settings (inspector-editable component) -----------------------------------------------
+
+/// Per-camera settings for weighted blended OIT. Add to a camera with [`GaussianCamera`]
+/// when using [`SortMode::Oit`] to tune accumulation and resolve behavior in the inspector.
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component)]
+pub struct OitSettings {
+    /// Scale for depth-based weight: `1.0 / (1.0 + view_depth * depth_weight_scale)`.
+    /// Higher values favor closer fragments more (default: `0.01`).
+    #[reflect(range(0.0..=0.5))]
+    pub depth_weight_scale: f32,
+    /// Minimum fragment weight to avoid division issues in resolve (default: `1e-3`).
+    #[reflect(range(0.00001..=0.1))]
+    pub min_weight: f32,
+}
+
+impl Default for OitSettings {
+    fn default() -> Self {
+        Self {
+            depth_weight_scale: 0.01,
+            min_weight: 1e-3,
+        }
+    }
+}
+
+impl ExtractComponent for OitSettings {
+    type QueryData = &'static Self;
+    type QueryFilter = With<Camera>;
+    type Out = Self;
+
+    fn extract_component(settings: QueryItem<'_, Self::QueryData>) -> Option<Self::Out> {
+        Some(*settings)
+    }
+}
+
+/// GPU uniform for OIT settings (must match WGSL layout).
+#[derive(Clone, Copy, ShaderType)]
+pub struct OitSettingsUniform {
+    pub depth_weight_scale: f32,
+    pub min_weight: f32,
+    pub _pad: Vec2,
+}
 
 /// OIT accumulation pass: draw gaussians to accum texture (additive).
 /// One label per format so we can order 3d before 4d (3d clears, 4d additive).
@@ -56,6 +100,40 @@ pub struct OitTextureEntry {
     pub texture: Texture,
     pub view: TextureView,
     pub size: (u32, u32),
+}
+
+/// Per-view OIT settings buffers (binding 15 in view bind group). Populated by `prepare_view_oit_settings`.
+#[derive(Resource, Default)]
+pub struct ViewOitSettingsBuffers {
+    pub buffers: HashMap<Entity, Buffer>,
+}
+
+/// Writes per-view OIT settings to uniform buffers so the view bind group can bind them.
+/// Run before `queue_gaussian_view_bind_groups`.
+pub fn prepare_view_oit_settings(
+    render_device: Res<RenderDevice>,
+    render_queue: Res<bevy::render::renderer::RenderQueue>,
+    mut buffers: ResMut<ViewOitSettingsBuffers>,
+    views: Query<(Entity, Option<&OitSettings>), With<GaussianCamera>>,
+) {
+    for (entity, oit) in &views {
+        let uniform = OitSettingsUniform {
+            depth_weight_scale: oit.map(|s| s.depth_weight_scale).unwrap_or(0.01),
+            min_weight: oit.map(|s| s.min_weight).unwrap_or(1e-3),
+            _pad: Vec2::ZERO,
+        };
+        let buffer = buffers.buffers.entry(entity).or_insert_with(|| {
+            render_device.create_buffer(&BufferDescriptor {
+                label: Some("oit_settings_uniform"),
+                size: OitSettingsUniform::min_size(),
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        render_queue.write_buffer(buffer, 0, bytemuck::bytes_of(&uniform.as_std140()));
+    }
+    // Remove buffers for despawned views
+    buffers.buffers.retain(|e, _| views.get(*e).is_ok());
 }
 
 /// Handle for the OIT resolve shader (set when loading the shader).

@@ -643,6 +643,16 @@ where
                 count: None,
             },
             visibility_ranges_entry,
+            BindGroupLayoutEntry {
+                binding: 15,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(oit::OitSettingsUniform::min_size()),
+                },
+                count: None,
+            },
         ];
 
         let view_layout_desc =
@@ -950,16 +960,13 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let shader_defs = shader_defs(key);
 
-        // Format must match the render pass format. When HDR is enabled, Bevy's core pipeline
-        // uses Rgba16Float for the render pass, so we must match that even when OIT is enabled.
-        // OIT can work with Rgba16Float, though with less precision than Rgba32Float.
-        // Note: OIT with Rgba16Float may show brightness/opacity issues due to precision loss
-        // in weight accumulation. For best quality, use OIT without HDR (Rgba32Float) or implement
-        // a custom OIT render target with Rgba32Float.
-        let format = if key.hdr {
-            TextureFormat::Rgba16Float
-        } else if key.oit {
+        // Format must match the render pass format. OIT accum pass always uses Rgba32Float, so
+        // when OIT is enabled we must use Rgba32Float regardless of HDR. Otherwise use the
+        // view's HDR format (Rgba16Float) or Rgba8UnormSrgb.
+        let format = if key.oit {
             TextureFormat::Rgba32Float
+        } else if key.hdr {
+            TextureFormat::Rgba16Float
         } else {
             TextureFormat::Rgba8UnormSrgb
         };

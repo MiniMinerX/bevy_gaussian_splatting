@@ -10,6 +10,13 @@
 
 @group(0) @binding(14) var<storage> visibility_ranges: array<vec4<f32>>;
 
+struct OitSettings {
+    depth_weight_scale: f32,
+    min_weight: f32,
+    _pad: vec2<f32>,
+}
+@group(0) @binding(15) var<uniform> oit_settings: OitSettings;
+
 struct GaussianUniforms {
     transform: mat4x4<f32>,
     global_opacity: f32,
