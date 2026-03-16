@@ -36,6 +36,45 @@ use crate::render::{
 use crate::sort::SortTrigger;
 use bevy::render::view::{ExtractedView, ViewDepthTexture};
 
+// #region agent log
+#[cfg(debug_assertions)]
+fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    static LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+    if LOG_COUNT.fetch_add(1, Ordering::Relaxed) >= 200 {
+        return;
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "sessionId": "a8c8d4",
+        "runId": "pre-fix-1",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-a8c8d4.log")
+    {
+        let _ = writeln!(file, "{payload}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_log(_hypothesis_id: &str, _location: &str, _message: &str, _data: serde_json::Value) {}
+// #endregion
+
 // --- OIT settings (inspector-editable component) -----------------------------------------------
 
 /// Per-camera settings for weighted blended OIT. Add to a camera with [`GaussianCamera`]
@@ -153,6 +192,19 @@ pub fn prepare_view_oit_settings(
         });
         // Std140 layout for this struct matches repr(C): f32, f32, vec2 = 16 bytes.
         render_queue.write_buffer(buffer, 0, bytemuck::bytes_of(&uniform));
+        // #region agent log
+        debug_log(
+            "H1",
+            "src/render/oit.rs:prepare_view_oit_settings",
+            "prepared OIT settings buffer",
+            serde_json::json!({
+                "entity": format!("{entity:?}"),
+                "has_oit_component": oit.is_some(),
+                "depth_weight_scale": uniform.depth_weight_scale,
+                "min_weight": uniform.min_weight
+            }),
+        );
+        // #endregion
     }
     // Remove buffers for despawned views
     buffers.buffers.retain(|e, _| views.get(*e).is_ok());
@@ -294,6 +346,20 @@ where
                     stencil_ops: None,
                 }
             });
+            // #region agent log
+            debug_log(
+                "H3",
+                "src/render/oit.rs:OitAccumNode::run",
+                "running OIT accum for view",
+                serde_json::json!({
+                    "retained_view_entity": format!("{retained_view_entity:?}"),
+                    "oit_list_len": oit_list.len(),
+                    "camera_index": sort_trigger.camera_index,
+                    "has_depth_texture": view_depth_texture.is_some(),
+                    "accum_size": {"w": entry.size.0, "h": entry.size.1}
+                }),
+            );
+            // #endregion
 
             let mut pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
                 label: Some("oit_accum"),
@@ -469,6 +535,19 @@ pub fn prepare_oit_textures(
                 .unwrap_or_else(|| view_target.main_texture());
             (tex.size().width, tex.size().height)
         };
+        // #region agent log
+        debug_log(
+            "H5",
+            "src/render/oit.rs:prepare_oit_textures",
+            "prepared OIT target size",
+            serde_json::json!({
+                "retained_view_entity": format!("{:?}", ext_view.retained_view_entity),
+                "width": width,
+                "height": height,
+                "used_depth_size": view_depth_texture.is_some()
+            }),
+        );
+        // #endregion
         if width == 0 || height == 0 {
             continue;
         }

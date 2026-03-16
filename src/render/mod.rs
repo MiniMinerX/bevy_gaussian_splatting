@@ -39,6 +39,45 @@ use bevy::{
 };
 use bevy_interleave::prelude::*;
 
+// #region agent log
+#[cfg(debug_assertions)]
+fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    static LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+    if LOG_COUNT.fetch_add(1, Ordering::Relaxed) >= 200 {
+        return;
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "sessionId": "a8c8d4",
+        "runId": "pre-fix-1",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug-a8c8d4.log")
+    {
+        let _ = writeln!(file, "{payload}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_log(_hypothesis_id: &str, _location: &str, _message: &str, _data: serde_json::Value) {}
+// #endregion
+
 #[cfg(feature = "buffer_storage")]
 use crate::sort::SortEntry;
 use crate::gaussian::formats::planar_3d::Gaussian3d;
@@ -411,19 +450,37 @@ pub(crate) fn queue_gaussians<R: PlanarSync>(
         else {
             continue;
         };
+        let visible_count = visible_entities.iter::<CloudVisibilityClass>().count();
 
         // First pass: determine if this view uses OIT (any visible cloud has SortMode::Oit)
         let mut view_uses_oit = false;
+        let mut oit_cloud_count = 0usize;
         for (render_entity, _) in visible_entities.iter::<CloudVisibilityClass>() {
             if let Ok((_, _, _, _, settings, _)) =
                 gaussian_splatting_bundles.get(*render_entity)
             {
                 if settings.sort_mode == SortMode::Oit {
                     view_uses_oit = true;
+                    oit_cloud_count += 1;
                     break;
                 }
             }
         }
+        // #region agent log
+        debug_log(
+            "H3",
+            "src/render/mod.rs:queue_gaussians",
+            "queued gaussian view",
+            serde_json::json!({
+                "retained_view_entity": format!("{:?}", view.retained_view_entity),
+                "visible_count": visible_count,
+                "view_uses_oit": view_uses_oit,
+                "oit_cloud_count_detected": oit_cloud_count,
+                "hdr": view.hdr,
+                "msaa_samples": msaa.cloned().unwrap_or_default().samples()
+            }),
+        );
+        // #endregion
 
         if view_uses_oit {
             let lists = view_oit_items
@@ -1354,6 +1411,7 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
             .get(&entity)
             .map(|b| b.as_entire_binding())
             .unwrap_or_else(|| default_oit_buffer_ref.as_entire_binding());
+        let has_custom_oit_buffer = view_oit_buffers.buffers.contains_key(&entity);
 
         let entries = vec![
             BindGroupEntry {
@@ -1382,6 +1440,19 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
             render_device.create_bind_group("gaussian_view_bind_group", layout, &entries);
 
         debug!("inserting gaussian view bind group");
+        // #region agent log
+        debug_log(
+            "H2",
+            "src/render/mod.rs:queue_gaussian_view_bind_groups",
+            "queued gaussian view bind group",
+            serde_json::json!({
+                "entity": format!("{entity:?}"),
+                "resources_changed": resources_changed,
+                "had_existing_bind_group": existing_bind_group.is_some(),
+                "has_custom_oit_buffer": has_custom_oit_buffer
+            }),
+        );
+        // #endregion
 
         commands.entity(entity).insert(GaussianViewBindGroup {
             value: view_bind_group,
