@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bevy::{
     core_pipeline::core_3d::graph::{Core3d, Node3d},
-    core_pipeline::prepass::PreviousViewUniformOffset,
+    core_pipeline::prepass::{MotionVectorPrepass, PreviousViewUniformOffset},
     ecs::query::QueryItem,
     prelude::*,
     render::{
@@ -176,6 +176,7 @@ pub struct OitAccumNode<R: PlanarSync> {
         &'static ExtractedView,
         &'static GaussianViewBindGroup,
         &'static ViewUniformOffset,
+        Option<Has<MotionVectorPrepass>>,
         Option<&'static PreviousViewUniformOffset>,
         &'static SortTrigger,
     ), With<GaussianCamera>>,
@@ -252,21 +253,25 @@ where
             };
             // Find the render-world view entity that has this retained view entity.
             let mut view_entity_opt = None;
-            for (v_entity, ext_view, vg, vo, prev_vo, st) in self.view_query.iter_manual(world) {
+            for (v_entity, ext_view, vg, vo, has_motion, prev_vo, st) in self.view_query.iter_manual(world) {
                 if ext_view.retained_view_entity == *retained_view_entity {
-                    view_entity_opt = Some((v_entity, vg, vo, prev_vo, st));
+                    view_entity_opt = Some((v_entity, vg, vo, has_motion, prev_vo, st));
                     break;
                 }
             }
-            let (view_bind_group, view_offset, previous_view_offset, sort_trigger) =
+            let (view_bind_group, view_offset, has_motion_vector_prepass, previous_view_offset, sort_trigger) =
                 match view_entity_opt {
-                    Some((_, vg, vo, prev_vo, st)) => (vg, vo, prev_vo, st),
+                    Some((_, vg, vo, has_motion, prev_vo, st)) => (vg, vo, has_motion, prev_vo, st),
                     None => continue,
                 };
             // View bind group expects 2 dynamic offsets: ViewUniform (binding 0), PreviousViewData (binding 2).
+            let previous_offset = match previous_view_offset {
+                Some(offset) if has_motion_vector_prepass.unwrap_or_default() => offset.offset,
+                _ => 0,
+            };
             let view_dynamic_offsets: [u32; 2] = [
                 view_offset.offset,
-                previous_view_offset.map(|p| p.offset).unwrap_or(0),
+                previous_offset,
             ];
 
             // Clear on first OIT accum node (3d); 4d and others additive on top.

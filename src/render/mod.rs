@@ -1335,23 +1335,11 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
         return;
     };
 
-    let resources_changed = gaussian_cloud_pipeline.is_changed()
-        || view_uniforms.is_changed()
-        || previous_view_uniforms.is_changed()
-        || globals_buffer.is_changed()
-        || visibility_ranges.is_changed()
-        || view_oit_buffers.is_changed()
-        || default_oit_buffer.is_changed();
-
     let Some(default_oit_buffer_ref) = default_oit_buffer.0.as_ref() else {
         return;
     };
 
-    for (entity, _extracted_view, _maybe_previous_view, existing_bind_group) in &views {
-        if !resources_changed && existing_bind_group.is_some() {
-            continue;
-        }
-
+    for (entity, _extracted_view, _maybe_previous_view, _existing_bind_group) in &views {
         let layout = &gaussian_cloud_pipeline.view_layout;
 
         let oit_resource = view_oit_buffers
@@ -1431,23 +1419,11 @@ pub fn queue_gaussian_compute_view_bind_groups<R: PlanarSync>(
         return;
     };
 
-    let resources_changed = gaussian_cloud_pipeline.is_changed()
-        || view_uniforms.is_changed()
-        || previous_view_uniforms.is_changed()
-        || globals_buffer.is_changed()
-        || visibility_ranges.is_changed()
-        || view_oit_buffers.is_changed()
-        || default_oit_buffer.is_changed();
-
     let Some(default_oit_buffer_ref) = default_oit_buffer.0.as_ref() else {
         return;
     };
 
-    for (entity, _extracted_view, _maybe_previous_view, existing_bind_group) in &views {
-        if !resources_changed && existing_bind_group.is_some() {
-            continue;
-        }
-
+    for (entity, _extracted_view, _maybe_previous_view, _existing_bind_group) in &views {
         let layout = &gaussian_cloud_pipeline.compute_view_layout;
 
         let oit_resource = view_oit_buffers
@@ -1496,6 +1472,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
     type ViewQuery = (
         Read<GaussianViewBindGroup>,
         Read<ViewUniformOffset>,
+        Option<Has<MotionVectorPrepass>>,
         Option<Read<PreviousViewUniformOffset>>,
     );
     type ItemQuery = ();
@@ -1503,7 +1480,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
     #[inline]
     fn render<'w>(
         _: &P,
-        (gaussian_view_bind_group, view_uniform, previous_view_uniform): ROQueryItem<
+        (gaussian_view_bind_group, view_uniform, has_motion_vector_prepass, previous_view_uniform): ROQueryItem<
             'w,
             'w,
             Self::ViewQuery,
@@ -1513,10 +1490,11 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         // View bind group has 2 dynamic offset bindings: ViewUniform (0), PreviousViewData (2).
-        let dynamic_offsets = [
-            view_uniform.offset,
-            previous_view_uniform.map(|p| p.offset).unwrap_or(0u32),
-        ];
+        let previous_offset = match previous_view_uniform {
+            Some(offset) if has_motion_vector_prepass.unwrap_or_default() => offset.offset,
+            _ => 0,
+        };
+        let dynamic_offsets = [view_uniform.offset, previous_offset];
         pass.set_bind_group(I, &gaussian_view_bind_group.value, &dynamic_offsets);
 
         debug!("set view bind group");
