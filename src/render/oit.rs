@@ -76,18 +76,32 @@ fn debug_log(_hypothesis_id: &str, _location: &str, _message: &str, _data: serde
 // #endregion
 
 // --- OIT settings (inspector-editable component) -----------------------------------------------
+// Paper: McGuire & Bavoil, "Weighted Blended OIT", JCGT 2013. Depth weight tunes how much
+// closer surfaces dominate; steeper curves (higher power) help high-opacity content.
 
 /// Per-camera settings for weighted blended OIT. Add to a camera with [`GaussianCamera`]
 /// when using [`SortMode::Oit`] to tune accumulation and resolve behavior in the inspector.
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 #[reflect(Component)]
 pub struct OitSettings {
-    /// Scale for depth-based weight: `1.0 / (1.0 + view_depth * depth_weight_scale)`.
-    /// Higher values favor closer fragments more. With gaussian splatting, a value
-    /// of 0.5–2.0 gives strong near/far discrimination (default: `1.0`).
+    /// Scale for depth-based weight. Weight = 1 / (1 + (view_depth * scale)^power).
+    /// Higher values favor closer fragments more (default: `1.0`).
     pub depth_weight_scale: f32,
     /// Minimum fragment weight to avoid division issues in resolve (default: `1e-4`).
     pub min_weight: f32,
+    /// Exponent for depth weight: 1 / (1 + (depth*scale)^power). Power > 1 (e.g. 2) gives
+    /// steeper falloff so closer splats dominate more; paper suggests tuning for content (default: `1.0`).
+    pub depth_weight_power: f32,
+    /// Multiply per-fragment alpha before accumulation. > 1 makes splats more opaque (default: `1.0`).
+    pub opacity_scale: f32,
+    /// Resolve: multiply accumulated alpha by this before coverage. > 1 reduces transparency (default: `1.0`).
+    pub accum_alpha_scale: f32,
+    /// Resolve: oit_alpha = pow(saturate(accum.a), power). Power < 1 (e.g. 0.7) boosts low alphas (default: `1.0`).
+    pub resolve_opacity_power: f32,
+    /// Resolve: add this to oit_alpha before over-blend. Slight positive bias reduces see-through (default: `0.0`).
+    pub opacity_bias: f32,
+    /// If true, render accum at half resolution for ~4x less fill; resolve upscales (default: `false`).
+    pub half_res: bool,
 }
 
 impl Default for OitSettings {
@@ -95,6 +109,12 @@ impl Default for OitSettings {
         Self {
             depth_weight_scale: 1.0,
             min_weight: 1e-4,
+            depth_weight_power: 1.0,
+            opacity_scale: 1.0,
+            accum_alpha_scale: 1.0,
+            resolve_opacity_power: 1.0,
+            opacity_bias: 0.0,
+            half_res: false,
         }
     }
 }
@@ -115,7 +135,35 @@ impl ExtractComponent for OitSettings {
 pub struct OitSettingsUniform {
     pub depth_weight_scale: f32,
     pub min_weight: f32,
-    pub _pad: Vec2,
+    pub depth_weight_power: f32,
+    pub opacity_scale: f32,
+    pub accum_alpha_scale: f32,
+    pub resolve_opacity_power: f32,
+    pub opacity_bias: f32,
+    pub _pad0: f32,
+    pub half_res: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+    pub _pad3: u32,
+}
+
+impl Default for OitSettingsUniform {
+    fn default() -> Self {
+        Self {
+            depth_weight_scale: 1.0,
+            min_weight: 1e-4,
+            depth_weight_power: 1.0,
+            opacity_scale: 1.0,
+            accum_alpha_scale: 1.0,
+            resolve_opacity_power: 1.0,
+            opacity_bias: 0.0,
+            _pad0: 0.0,
+            half_res: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: 0,
+        }
+    }
 }
 
 /// OIT clear pass: clear accum texture for every view that has OIT content.
@@ -218,6 +266,7 @@ pub fn prepare_view_oit_settings(
     mut default_buffer: ResMut<DefaultOitSettingsBuffer>,
     views: Query<(Entity, Option<&OitSettings>), With<GaussianCamera>>,
 ) {
+    let default_uniform = OitSettingsUniform::default();
     if default_buffer.0.is_none() {
         let buffer = render_device.create_buffer(&BufferDescriptor {
             label: Some("oit_settings_default_uniform"),
@@ -225,20 +274,25 @@ pub fn prepare_view_oit_settings(
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let default_uniform = OitSettingsUniform {
-            depth_weight_scale: 1.0,
-            min_weight: 1e-4,
-            _pad: Vec2::ZERO,
-        };
         render_queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&default_uniform));
         default_buffer.0 = Some(buffer);
     }
 
     for (entity, oit) in &views {
+        let s = oit.copied().unwrap_or_default();
         let uniform = OitSettingsUniform {
-            depth_weight_scale: oit.map(|s| s.depth_weight_scale).unwrap_or(1.0),
-            min_weight: oit.map(|s| s.min_weight).unwrap_or(1e-4),
-            _pad: Vec2::ZERO,
+            depth_weight_scale: s.depth_weight_scale,
+            min_weight: s.min_weight,
+            depth_weight_power: s.depth_weight_power,
+            opacity_scale: s.opacity_scale,
+            accum_alpha_scale: s.accum_alpha_scale,
+            resolve_opacity_power: s.resolve_opacity_power,
+            opacity_bias: s.opacity_bias,
+            _pad0: 0.0,
+            half_res: s.half_res as u32,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: 0,
         };
         let buffer = buffers.buffers.entry(entity).or_insert_with(|| {
             render_device.create_buffer(&BufferDescriptor {
@@ -512,11 +566,20 @@ impl ViewNode for OitResolveNode {
 
         let resolve_pipeline = world.resource::<OitResolvePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
+        let view_oit_buffers = world.resource::<ViewOitSettingsBuffers>();
+        let default_oit_buffer = world.resource::<DefaultOitSettingsBuffer>();
         let Some(pipeline) = pipeline_cache.get_render_pipeline(resolve_pipeline.pipeline_id) else {
             return Ok(());
         };
 
         let post_process = view_target.post_process_write();
+
+        let oit_resource = view_oit_buffers
+            .buffers
+            .get(&_view_entity)
+            .map(|b| b.as_entire_binding())
+            .or_else(|| default_oit_buffer.0.as_ref().map(|b| b.as_entire_binding()))
+            .expect("OIT resolve requires view or default OIT settings buffer");
 
         let bind_group = render_context.render_device().create_bind_group(
             Some("oit_resolve_bind_group"),
@@ -533,6 +596,10 @@ impl ViewNode for OitResolveNode {
                 BindGroupEntry {
                     binding: 2,
                     resource: BindingResource::Sampler(&resolve_pipeline.sampler),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: oit_resource,
                 },
             ],
         );
@@ -569,6 +636,7 @@ pub fn prepare_oit_textures(
             &ExtractedView,
             &ViewTarget,
             Option<&ViewDepthTexture>,
+            Option<&OitSettings>,
         ),
         With<GaussianCamera>,
     >,
@@ -578,16 +646,20 @@ pub fn prepare_oit_textures(
         .cache
         .retain(|retained_view_entity, _| view_oit_items.items.contains_key(retained_view_entity));
 
-    for (_view_entity, ext_view, view_target, view_depth_texture) in &views {
+    for (_view_entity, ext_view, view_target, view_depth_texture, oit_settings) in &views {
         if !view_oit_items.items.contains_key(&ext_view.retained_view_entity) {
             continue;
         }
-        let (width, height) = {
+        let (mut width, mut height) = {
             let tex = view_depth_texture
                 .map(|depth| &depth.texture)
                 .unwrap_or_else(|| view_target.main_texture());
             (tex.size().width, tex.size().height)
         };
+        if oit_settings.map(|s| s.half_res).unwrap_or(false) {
+            width = (width / 2).max(1);
+            height = (height / 2).max(1);
+        }
         // #region agent log
         debug_log(
             "H5",
@@ -672,6 +744,16 @@ pub fn init_oit_resolve_pipeline(
             binding: 2,
             visibility: ShaderStages::FRAGMENT,
             ty: BindingType::Sampler(SamplerBindingType::Filtering),
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 3,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: Some(OitSettingsUniform::min_size()),
+            },
             count: None,
         },
     ];

@@ -532,10 +532,12 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
     // TODO: round alpha to terminate depth test?
 
 #ifdef USE_OIT
-    let depth_weight = 1.0 / (1.0 + input.view_depth * oit_settings.depth_weight_scale);
+    let z = input.view_depth * oit_settings.depth_weight_scale;
+    let depth_weight = 1.0 / (1.0 + pow(z, oit_settings.depth_weight_power));
     let weight = max(oit_settings.min_weight, depth_weight);
-    let premul = input.color.rgb * alpha;
-    return vec4<f32>(premul * weight, alpha * weight);
+    let alpha_scaled = alpha * oit_settings.opacity_scale;
+    let premul = input.color.rgb * alpha_scaled;
+    return vec4<f32>(premul * weight, alpha_scaled * weight);
 #else
     return vec4<f32>(
         input.color.rgb * alpha,

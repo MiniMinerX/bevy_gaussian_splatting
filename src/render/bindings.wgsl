@@ -13,7 +13,16 @@
 struct OitSettings {
     depth_weight_scale: f32,
     min_weight: f32,
-    _pad: vec2<f32>,
+    depth_weight_power: f32,
+    opacity_scale: f32,
+    accum_alpha_scale: f32,
+    resolve_opacity_power: f32,
+    opacity_bias: f32,
+    _pad0: f32,
+    half_res: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 @group(0) @binding(15) var<uniform> oit_settings: OitSettings;
 
