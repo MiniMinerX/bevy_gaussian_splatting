@@ -27,6 +27,8 @@ pub mod bitonic;
 
 #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
 pub mod radix;
+#[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+pub use radix::RadixSortDoubleBuffer;
 
 #[cfg(feature = "sort_rayon")]
 pub mod rayon;
@@ -516,16 +518,36 @@ impl RenderAsset for GpuSortedEntry {
         render_device: &mut SystemParamItem<Self::Param>,
         _: Option<&Self>,
     ) -> Result<Self, PrepareAssetError<Self::SourceAsset>> {
+        let contents = bytemuck::cast_slice(source.sorted.as_slice());
+        let usage = BufferUsages::COPY_SRC | BufferUsages::COPY_DST | BufferUsages::STORAGE;
+
         let sorted_entry_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("sorted_entry_buffer"),
-            contents: bytemuck::cast_slice(source.sorted.as_slice()),
-            usage: BufferUsages::COPY_SRC | BufferUsages::COPY_DST | BufferUsages::STORAGE,
+            contents,
+            usage,
         });
+
+        #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+        let sorted_entry_buffers = {
+            let b0 = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("sorted_entry_buffer_0"),
+                contents,
+                usage,
+            });
+            let b1 = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("sorted_entry_buffer_1"),
+                contents,
+                usage,
+            });
+            [b0, b1]
+        };
 
         let count = source.sorted.len();
 
         Ok(GpuSortedEntry {
             sorted_entry_buffer,
+            #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+            sorted_entry_buffers: Some(sorted_entry_buffers),
             count,
 
             #[cfg(feature = "buffer_texture")]
@@ -542,9 +564,32 @@ impl RenderAsset for GpuSortedEntry {
 //       separate entry_buffer_a binding into unique a bind group to optimize buffer updates
 #[derive(Debug, Clone)]
 pub struct GpuSortedEntry {
+    /// Single buffer (used when not using radix double-buffering; when double-buffering, this is buffer 0).
     pub sorted_entry_buffer: Buffer,
+    /// When present, radix uses temporal double-buffering: draw reads from read_index, sort writes to write_index.
+    #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+    pub sorted_entry_buffers: Option<[Buffer; 2]>,
     pub count: usize,
 
     #[cfg(feature = "buffer_texture")]
     pub texture: Handle<Image>,
+}
+
+#[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+impl GpuSortedEntry {
+    /// Buffer for the draw to read from (previous frame's sort when using temporal double-buffering).
+    pub fn draw_buffer(&self, read_index: u8) -> &Buffer {
+        self.sorted_entry_buffers
+            .as_ref()
+            .map(|buffs| &buffs[read_index as usize])
+            .unwrap_or(&self.sorted_entry_buffer)
+    }
+
+    /// Buffer for radix sort to read/write this frame.
+    pub fn sort_buffer(&self, write_index: u8) -> &Buffer {
+        self.sorted_entry_buffers
+            .as_ref()
+            .map(|buffs| &buffs[write_index as usize])
+            .unwrap_or(&self.sorted_entry_buffer)
+    }
 }

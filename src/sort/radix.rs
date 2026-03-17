@@ -74,11 +74,15 @@ where
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(
                 Render,
-                (queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),),
+                (
+                    flip_radix_double_buffer.before(RenderSystems::Queue),
+                    queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),
+                ),
             );
 
             render_app.init_resource::<RadixSortBuffers<R>>();
             render_app.init_resource::<RadixSortConfig>();
+            render_app.init_resource::<RadixSortDoubleBuffer>();
             render_app.add_systems(
                 ExtractSchedule,
                 (update_sort_buffers::<R>, extract_radix_sort_config),
@@ -124,6 +128,13 @@ pub struct RadixSortConfig {
     pub radix_digit_passes: u32,
 }
 
+/// Which of the two sort-output buffers the draw should read from (previous frame's sort).
+/// Radix sort writes to the other buffer; we flip at end of sort so next frame's draw uses it.
+#[derive(Resource, Default)]
+pub struct RadixSortDoubleBuffer {
+    pub read_index: u8,
+}
+
 impl Default for RadixSortConfig {
     fn default() -> Self {
         Self {
@@ -134,6 +145,11 @@ impl Default for RadixSortConfig {
 
 fn extract_radix_sort_config(sort_config: Extract<Res<SortConfig>>, mut radix_config: ResMut<RadixSortConfig>) {
     radix_config.radix_digit_passes = sort_config.radix_digit_passes.clamp(1, 4);
+}
+
+/// Flip read/write indices so draw uses previous frame's sort and sort writes to the other buffer.
+fn flip_radix_double_buffer(mut double_buffer: ResMut<RadixSortDoubleBuffer>) {
+    double_buffer.read_index = 1 - double_buffer.read_index;
 }
 
 #[derive(Resource)]
@@ -318,6 +334,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
         let shader_defs = shader_defs(CloudPipelineKey::default());
 
         let pipeline_cache = render_world.resource::<PipelineCache>();
+        // Shaders write all workgroup memory before read; skip driver zero-init for a small win.
         let radix_reset = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("radix_sort_reset".into()),
             layout: sorting_layout.clone(),
@@ -325,7 +342,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_reset".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_a = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -335,7 +352,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_a".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_b = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -345,7 +362,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_b".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_count = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -355,7 +372,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_c_count_tiles".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_scan = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -365,7 +382,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_c_scan_tiles".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_scatter =
@@ -376,7 +393,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 shader: RADIX_SHADER_HANDLE,
                 shader_defs: shader_defs.clone(),
                 entry_point: Some("radix_sort_c_scatter".into()),
-                zero_initialize_workgroup_memory: true,
+                zero_initialize_workgroup_memory: false,
             });
 
         RadixSortPipeline {
@@ -409,6 +426,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
     asset_server: Res<AssetServer>,
     gaussian_cloud_res: Res<RenderAssets<R::GpuPlanarType>>,
     sorted_entries_res: Res<RenderAssets<GpuSortedEntry>>,
+    double_buffer: Res<RadixSortDoubleBuffer>,
     gaussian_clouds: Query<(
         Entity,
         &R::PlanarTypeHandle,
@@ -419,6 +437,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
 ) where
     R::GpuPlanarType: GpuPlanarStorage,
 {
+    let write_index = 1 - double_buffer.read_index;
     for (entity, cloud_handle, sorted_entries_handle, settings) in gaussian_clouds.iter() {
         if settings.sort_mode != SortMode::Radix {
             commands.entity(entity).remove::<RadixBindGroup>();
@@ -484,20 +503,15 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
             }),
         };
 
+        let sort_out = sorted_entries.sort_buffer(write_index);
         let radix_sort_bind_groups: [BindGroup; 8] = {
             let mut groups: Vec<BindGroup> = Vec::with_capacity(8);
             for pass_idx in 0..4 {
                 for parity in 0..=1 {
                     let (input_buf, output_buf) = if parity == 0 {
-                        (
-                            &sorted_entries.sorted_entry_buffer,
-                            &sorting_assets.entry_buffer_b,
-                        )
+                        (sort_out, &sorting_assets.entry_buffer_b)
                     } else {
-                        (
-                            &sorting_assets.entry_buffer_b,
-                            &sorted_entries.sorted_entry_buffer,
-                        )
+                        (&sorting_assets.entry_buffer_b, sort_out)
                     };
 
                     let group = render_device.create_bind_group(

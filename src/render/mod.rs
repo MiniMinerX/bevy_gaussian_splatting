@@ -96,6 +96,8 @@ use crate::{
     morph::MorphPlugin,
     sort::{GpuSortedEntry, SortPlugin, SortTrigger, SortedEntriesHandle},
 };
+#[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+use crate::sort::RadixSortDoubleBuffer;
 
 #[cfg(feature = "packed")]
 mod packed;
@@ -850,8 +852,10 @@ impl Default for ShaderDefines {
         let radix_bits_per_digit = 8;
         let radix_digit_places = 32 / radix_bits_per_digit;
         let radix_base = 1 << radix_bits_per_digit;
-        let entries_per_invocation_a = 4;
-        let entries_per_invocation_c = 4;
+        // More entries per thread = fewer workgroups, better GPU occupancy (up to memory limits).
+        // C pass uses workgroup shared memory ~2*workgroup_entries_c*8 bytes; 2048 => 32KB (typical limit).
+        let entries_per_invocation_a = 8;
+        let entries_per_invocation_c = 8;
         let workgroup_invocations_a = radix_base * radix_digit_places;
         let workgroup_invocations_c = radix_base;
         let workgroup_entries_a = workgroup_invocations_a * entries_per_invocation_a;
@@ -1236,6 +1240,8 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
     asset_server: Res<AssetServer>,
     gaussian_cloud_res: Res<RenderAssets<R::GpuPlanarType>>,
     sorted_entries_res: Res<RenderAssets<GpuSortedEntry>>,
+    #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+    double_buffer: Option<Res<RadixSortDoubleBuffer>>,
     gaussian_clouds: Query<GpuCloudBindGroupQuery<R>>,
     #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))] gpu_images: Res<
         RenderAssets<bevy::render::texture::GpuImage>,
@@ -1263,8 +1269,13 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
     let mut should_refresh_for_assets =
         pipeline_changed || gaussian_assets_changed || sorted_assets_changed;
     #[cfg(not(all(feature = "buffer_texture", not(feature = "buffer_storage"))))]
-    let should_refresh_for_assets =
+    let mut should_refresh_for_assets =
         pipeline_changed || gaussian_assets_changed || sorted_assets_changed;
+
+    #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+    if double_buffer.is_some() {
+        should_refresh_for_assets = true;
+    }
 
     #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
     {
@@ -1305,18 +1316,27 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
         let sorted_entries = sorted_entries_res.get(&sorted_entries_handle.0).unwrap();
 
         #[cfg(feature = "buffer_storage")]
-        let sorted_bind_group = render_device.create_bind_group(
-            "render_sorted_bind_group",
-            &gaussian_cloud_pipeline.sorted_layout,
-            &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(BufferBinding {
-                    buffer: &sorted_entries.sorted_entry_buffer,
-                    offset: 0,
-                    size: BufferSize::new((cloud.len() * std::mem::size_of::<SortEntry>()) as u64),
-                }),
-            }],
-        );
+        let sorted_bind_group = {
+            #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+            let draw_buf = double_buffer
+                .as_ref()
+                .map(|db| sorted_entries.draw_buffer(db.read_index))
+                .unwrap_or(&sorted_entries.sorted_entry_buffer);
+            #[cfg(not(all(feature = "sort_radix", not(feature = "buffer_texture"))))]
+            let draw_buf = &sorted_entries.sorted_entry_buffer;
+            render_device.create_bind_group(
+                "render_sorted_bind_group",
+                &gaussian_cloud_pipeline.sorted_layout,
+                &[BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: draw_buf,
+                        offset: 0,
+                        size: BufferSize::new((cloud.len() * std::mem::size_of::<SortEntry>()) as u64),
+                    }),
+                }],
+            )
+        };
         #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
         let sorted_bind_group = render_device.create_bind_group(
             Some("render_sorted_bind_group"),
