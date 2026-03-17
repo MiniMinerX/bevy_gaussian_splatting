@@ -14,11 +14,11 @@ struct OitResolveParams {
     accum_alpha_scale: f32,
     resolve_opacity_power: f32,
     opacity_bias: f32,
-    pad0: f32,
+    align_float: f32,
     half_res_unused: u32,
-    pad1: u32,
-    pad2: u32,
-    pad3: u32,
+    align_u: u32,
+    align_v: u32,
+    align_w: u32,
 }
 @group(0) @binding(3) var<uniform> oit_resolve: OitResolveParams;
 
