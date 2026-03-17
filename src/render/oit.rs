@@ -111,10 +111,14 @@ impl Default for OitSettings {
             min_weight: 1e-4,
             depth_weight_power: 1.0,
             opacity_scale: 1.0,
-            accum_alpha_scale: 1.0,
-            resolve_opacity_power: 1.0,
-            opacity_bias: 0.0,
-            half_res: false,
+            // Default > 1 so resolved alpha isn't stuck too transparent (weighted blend often under-reports coverage).
+            accum_alpha_scale: 2.5,
+            // Power < 1 boosts low alphas so thin splats don't disappear.
+            resolve_opacity_power: 0.85,
+            // Small bias reduces see-through; tune in inspector if needed.
+            opacity_bias: 0.03,
+            // Half-res accum (~4x less fill) for better OIT performance vs radix.
+            half_res: true,
         }
     }
 }
@@ -149,16 +153,17 @@ pub struct OitSettingsUniform {
 
 impl Default for OitSettingsUniform {
     fn default() -> Self {
+        let s = OitSettings::default();
         Self {
-            depth_weight_scale: 1.0,
-            min_weight: 1e-4,
-            depth_weight_power: 1.0,
-            opacity_scale: 1.0,
-            accum_alpha_scale: 1.0,
-            resolve_opacity_power: 1.0,
-            opacity_bias: 0.0,
+            depth_weight_scale: s.depth_weight_scale,
+            min_weight: s.min_weight,
+            depth_weight_power: s.depth_weight_power,
+            opacity_scale: s.opacity_scale,
+            accum_alpha_scale: s.accum_alpha_scale,
+            resolve_opacity_power: s.resolve_opacity_power,
+            opacity_bias: s.opacity_bias,
             _pad0: 0.0,
-            half_res: 0,
+            half_res: s.half_res as u32,
             _pad1: 0,
             _pad2: 0,
             _pad3: 0,
