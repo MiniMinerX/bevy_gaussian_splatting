@@ -72,12 +72,16 @@ where
     fn build(&self, app: &mut App) {
         // TODO: run once
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            // Flip after the render graph (draw + radix compute) so Queue on the *next* frame
+            // binds the buffer that was written this frame. Flipping before Queue uses the wrong
+            // buffer on frame 1 and can cause black / decaying feedback.
             render_app.add_systems(
                 Render,
-                (
-                    flip_radix_double_buffer.before(RenderSystems::Queue),
-                    queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),
-                ),
+                queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),
+            );
+            render_app.add_systems(
+                Render,
+                flip_radix_double_buffer.in_set(RenderSystems::Cleanup),
             );
 
             render_app.init_resource::<RadixSortBuffers<R>>();
@@ -129,7 +133,8 @@ pub struct RadixSortConfig {
 }
 
 /// Which of the two sort-output buffers the draw should read from (previous frame's sort).
-/// Radix sort writes to the other buffer; we flip at end of sort so next frame's draw uses it.
+/// Radix writes to the other buffer; [`flip_radix_double_buffer`] runs in [`RenderSystems::Cleanup`]
+/// so bind groups queued next frame see the completed sort.
 #[derive(Resource, Default)]
 pub struct RadixSortDoubleBuffer {
     pub read_index: u8,
