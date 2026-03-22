@@ -55,7 +55,7 @@ pub enum GaussianColorSpace {
 
 // TODO: breakdown into components
 #[derive(Component, Clone, Debug, Reflect, Serialize, Deserialize)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 #[serde(default)]
 pub struct CloudSettings {
     pub aabb: bool,
