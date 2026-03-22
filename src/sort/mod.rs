@@ -80,6 +80,15 @@ pub struct SortConfig {
     /// Number of radix digit passes (1..=4). 4 = full 32-bit sort, 2 = 16-bit (~2x faster, visually near-identical).
     #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
     pub radix_digit_passes: u32,
+    /// **Blocking vs nonblocking radix**
+    ///
+    /// - `false` (**blocking / legacy**): GPU radix runs **every frame**, regardless of
+    ///   [`SortTrigger::needs_sort`]. Highest GPU cost; smoothest depth order when the GPU can keep up.
+    /// - `true` (**nonblocking**): radix runs only when [`SortTrigger::needs_sort`] is true, using the
+    ///   same cadence as CPU sorts ([`SortTrigger::last_sort_time`] + [`period_ms`] + camera movement).
+    ///   Skipped frames reuse the previous sort order (similar to a long rayon `period_ms`).
+    #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+    pub radix_nonblocking: bool,
 }
 
 impl Default for SortConfig {
@@ -88,6 +97,8 @@ impl Default for SortConfig {
             period_ms: 100,
             #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
             radix_digit_passes: 4,
+            #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
+            radix_nonblocking: false,
         }
     }
 }

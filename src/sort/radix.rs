@@ -1,6 +1,7 @@
 #[cfg(feature = "morph_interpolate")]
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -10,7 +11,7 @@ use bevy::{
     },
     prelude::*,
     render::{
-        Extract, Render, RenderApp, RenderSystems,
+        Extract, MainWorld, Render, RenderApp, RenderSystems,
         render_asset::RenderAssets,
         render_graph::{Node, NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel},
         render_resource::{
@@ -36,7 +37,7 @@ use crate::{
         CloudPipeline, CloudPipelineKey, GaussianUniformBindGroups, ShaderDefines, shader_defs,
     },
     sort::{
-        GpuSortedEntry, ShareSort, SortConfig, SortEntry, SortMode, SortPluginFlag,
+        GpuSortedEntry, ShareSort, SortConfig, SortEntry, SortMode, SortPluginFlag, SortTrigger,
         SortedEntriesHandle,
     },
 };
@@ -74,11 +75,15 @@ where
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(
                 Render,
-                (queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),),
+                (
+                    queue_radix_bind_group::<R>.in_set(RenderSystems::Queue),
+                    apply_radix_sort_trigger_clears.in_set(RenderSystems::Cleanup),
+                ),
             );
 
             render_app.init_resource::<RadixSortBuffers<R>>();
             render_app.init_resource::<RadixSortConfig>();
+            render_app.init_resource::<RadixSortPendingClears>();
             render_app.add_systems(
                 ExtractSchedule,
                 (update_sort_buffers::<R>, extract_radix_sort_config),
@@ -118,22 +123,55 @@ where
     }
 }
 
-/// Render-world mirror of `SortConfig::radix_digit_passes`.
+/// Render-world mirror of radix-related [`SortConfig`] fields.
 #[derive(Resource)]
 pub struct RadixSortConfig {
     pub radix_digit_passes: u32,
+    pub radix_nonblocking: bool,
 }
 
 impl Default for RadixSortConfig {
     fn default() -> Self {
         Self {
             radix_digit_passes: 4,
+            radix_nonblocking: false,
         }
     }
 }
 
 fn extract_radix_sort_config(sort_config: Extract<Res<SortConfig>>, mut radix_config: ResMut<RadixSortConfig>) {
     radix_config.radix_digit_passes = sort_config.radix_digit_passes.clamp(1, 4);
+    radix_config.radix_nonblocking = sort_config.radix_nonblocking;
+}
+
+/// Queues main-world [`SortTrigger::needs_sort`] clears after radix work is submitted (nonblocking mode).
+#[derive(Resource)]
+pub struct RadixSortPendingClears(pub Mutex<Vec<Entity>>);
+
+impl Default for RadixSortPendingClears {
+    fn default() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+}
+
+fn apply_radix_sort_trigger_clears(
+    pending: Res<RadixSortPendingClears>,
+    mut main_world: ResMut<MainWorld>,
+) {
+    let entities: Vec<Entity> = {
+        let mut guard = pending.0.lock().unwrap();
+        core::mem::take(&mut *guard)
+    };
+
+    if entities.is_empty() {
+        return;
+    }
+
+    for entity in entities {
+        if let Some(mut trigger) = main_world.get_mut::<SortTrigger>(entity) {
+            trigger.needs_sort = false;
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -561,6 +599,8 @@ pub struct RadixSortNode<R: PlanarSync> {
     initialized: bool,
     view_bind_group: QueryState<
         (
+            Entity,
+            &'static SortTrigger,
             &'static GaussianCamera,
             &'static crate::render::GaussianComputeViewBindGroup,
             &'static ViewUniformOffset,
@@ -626,13 +666,28 @@ where
         let gaussian_uniforms = world.resource::<GaussianUniformBindGroups>();
         let sort_buffers = world.resource::<RadixSortBuffers<R>>();
         let radix_config = world.resource::<RadixSortConfig>();
+        let pending_clears = world.resource::<RadixSortPendingClears>();
 
-        for (_camera, view_bind_group, view_uniform_offset, previous_view_uniform_offset) in
-            self.view_bind_group.iter_manual(world)
+        for (
+            view_entity,
+            sort_trigger,
+            _camera,
+            view_bind_group,
+            view_uniform_offset,
+            previous_view_uniform_offset,
+        ) in self.view_bind_group.iter_manual(world)
         {
+            if radix_config.radix_nonblocking && !sort_trigger.needs_sort {
+                continue;
+            }
+
+            let mut ran_radix = false;
+
             for (cloud_handle, cloud_bind_group, radix_bind_group) in
                 self.gaussian_clouds.iter_manual(world)
             {
+                ran_radix = true;
+
                 let cloud = world
                     .get_resource::<RenderAssets<R::GpuPlanarType>>()
                     .unwrap()
@@ -765,6 +820,14 @@ where
                         pass.dispatch_workgroups(1, tile_workgroups, 1);
                     }
                 }
+            }
+
+            if radix_config.radix_nonblocking && ran_radix {
+                pending_clears
+                    .0
+                    .lock()
+                    .unwrap()
+                    .push(view_entity);
             }
         }
 
