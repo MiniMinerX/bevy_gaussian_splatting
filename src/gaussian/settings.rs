@@ -53,12 +53,47 @@ pub enum GaussianColorSpace {
     LinRec709Display,
 }
 
+/// Screen-space footprint for each splat: axis-aligned quad, oriented quad (ellipse axes), or
+/// three vertices (one triangle) with the same OBB axes — fewer triangles, slightly less coverage.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    PartialEq,
+    Reflect,
+    Serialize,
+    Deserialize,
+    ValueEnum,
+)]
+pub enum GaussianBounds {
+    /// Axis-aligned square in NDC (max of ellipse axes).
+    Aabb,
+    /// Rotated quad aligned with projected covariance axes (default).
+    #[default]
+    Obb,
+    /// One triangle (two raster triangles fewer than a quad strip); uses same OBB scale/rotation.
+    Triangle,
+}
+
+impl GaussianBounds {
+    #[inline]
+    pub const fn vertex_count(self) -> u32 {
+        match self {
+            GaussianBounds::Triangle => 3,
+            GaussianBounds::Aabb | GaussianBounds::Obb => 4,
+        }
+    }
+}
+
 // TODO: breakdown into components
 #[derive(Component, Clone, Debug, Reflect, Serialize, Deserialize)]
 #[reflect(Component, Default)]
 #[serde(default)]
 pub struct CloudSettings {
-    pub aabb: bool,
+    pub bounds: GaussianBounds,
     /// Cap splats sorted & drawn per frame (`min(len, budget)`). `0` = use full cloud.
     ///
     /// Only indices `0 .. count` participate; training order is arbitrary — for quality at a cap,
@@ -91,7 +126,7 @@ impl CloudSettings {
 impl Default for CloudSettings {
     fn default() -> Self {
         Self {
-            aabb: false,
+            bounds: GaussianBounds::default(),
             splat_render_budget: 0,
             quad_cutoff_scale: 1.0,
             global_opacity: 1.0,
@@ -117,6 +152,7 @@ impl Default for CloudSettings {
 pub struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<GaussianBounds>();
         app.register_type::<CloudSettings>();
 
         app.add_systems(Update, (playback_update,));

@@ -45,7 +45,9 @@ use crate::{
     gaussian::{
         cloud::CloudVisibilityClass,
         interface::CommonCloud,
-        settings::{CloudSettings, DrawMode, GaussianColorSpace, GaussianMode, RasterizeMode},
+        settings::{
+            CloudSettings, DrawMode, GaussianBounds, GaussianColorSpace, GaussianMode, RasterizeMode,
+        },
     },
     material::{
         spherical_harmonics::{HALF_SH_COEFF_COUNT, SH_COEFF_COUNT, SH_DEGREE, SH_VEC4_PLANES},
@@ -405,7 +407,7 @@ fn queue_gaussians<R: PlanarSync>(
             let msaa = msaa.cloned().unwrap_or_default();
 
             let key = CloudPipelineKey {
-                aabb: settings.aabb,
+                bounds: settings.bounds,
                 binary_gaussian_op: false,
                 opacity_adaptive_radius: settings.opacity_adaptive_radius,
                 visualize_bounding_box: settings.visualize_bounding_box,
@@ -775,12 +777,10 @@ pub fn shader_defs(key: CloudPipelineKey) -> Vec<ShaderDefVal> {
         ),
     ];
 
-    if key.aabb {
-        shader_defs.push("USE_AABB".into());
-    }
-
-    if !key.aabb {
-        shader_defs.push("USE_OBB".into());
+    match key.bounds {
+        GaussianBounds::Aabb => shader_defs.push("USE_AABB".into()),
+        GaussianBounds::Obb => shader_defs.push("USE_OBB".into()),
+        GaussianBounds::Triangle => shader_defs.push("USE_TRIANGLE".into()),
     }
 
     if key.binary_gaussian_op {
@@ -867,7 +867,7 @@ pub fn shader_defs(key: CloudPipelineKey) -> Vec<ShaderDefVal> {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub struct CloudPipelineKey {
-    pub aabb: bool,
+    pub bounds: GaussianBounds,
     pub binary_gaussian_op: bool,
     pub visualize_bounding_box: bool,
     pub opacity_adaptive_radius: bool,
@@ -970,6 +970,7 @@ pub struct CloudUniform {
     pub _pad_gaussian_uniform: u32,
     pub count: u32,
     pub count_root_ceil: u32,
+    pub vertex_count: u32,
     pub time: f32,
     pub time_start: f32,
     pub time_stop: f32,
@@ -1039,6 +1040,7 @@ pub fn extract_gaussians<R: PlanarSync>(
             _pad_gaussian_uniform: 0,
             count,
             count_root_ceil: (count as f32).sqrt().ceil() as u32,
+            vertex_count: settings.bounds.vertex_count(),
             time: settings.time,
             time_start: settings.time_start,
             time_stop: settings.time_stop,
@@ -1503,6 +1505,7 @@ where
         Read<R::PlanarTypeHandle>,
         Read<PlanarStorageBindGroup<R>>,
         Read<SortBindGroup>,
+        Read<CloudUniform>,
     );
 
     #[inline]
@@ -1513,6 +1516,7 @@ where
             &'w R::PlanarTypeHandle,
             &'w PlanarStorageBindGroup<R>,
             &'w SortBindGroup,
+            &'w CloudUniform,
         )>,
         gaussian_clouds: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
@@ -1522,7 +1526,7 @@ where
         #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
         let _ = view;
 
-        let (handle, planar_bind_groups, sort_bind_groups) =
+        let (handle, planar_bind_groups, sort_bind_groups, _cloud_uniform) =
             entity.expect("gaussian cloud entity not found");
 
         let gpu_gaussian_cloud = match gaussian_clouds.into_inner().get(handle.handle()) {
@@ -1555,7 +1559,10 @@ where
         }
 
         #[cfg(feature = "webgl2")]
-        pass.draw(0..4, 0..gpu_gaussian_cloud.len() as u32);
+        pass.draw(
+            0.._cloud_uniform.vertex_count.max(3),
+            0..gpu_gaussian_cloud.len() as u32,
+        );
 
         #[cfg(not(feature = "webgl2"))]
         pass.draw_indirect(gpu_gaussian_cloud.draw_indirect_buffer(), 0);

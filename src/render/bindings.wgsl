@@ -18,6 +18,7 @@ struct GaussianUniforms {
     _pad_gaussian_uniform: u32,
     count: u32,
     count_root_ceil: u32,
+    vertex_count: u32,
     time: f32,
     time_start: f32,
     time_stop: f32,

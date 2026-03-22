@@ -17,7 +17,7 @@ pub use gaussian::{
             random_gaussians_4d_seeded,
         },
     },
-    settings::{CloudSettings, GaussianMode, RasterizeMode},
+    settings::{CloudSettings, GaussianBounds, GaussianMode, RasterizeMode},
 };
 
 pub use io::scene::{
