@@ -51,6 +51,13 @@ struct SortingGlobal {
 // They are included here without changes.
 //
 
+// Per-`radix_sort_a` workgroup histogram: accumulate here, then flush to `sorting.digit_histogram`
+// once per workgroup (reduces global atomic traffic vs 4 atomics per splat on global memory).
+var<workgroup> wg_digit_hist: array<array<atomic<u32>, #{RADIX_BASE}>, #{RADIX_DIGIT_PLACES}>;
+
+// One row of `radix_sort_b` (256 threads / workgroup × one workgroup per digit place).
+var<workgroup> radix_b_row: array<u32, #{RADIX_BASE}>;
+
 @compute @workgroup_size(#{RADIX_BASE}, #{RADIX_DIGIT_PLACES})
 fn radix_reset(
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -79,6 +86,10 @@ fn radix_sort_a(
     }
     workgroupBarrier();
 
+    // One thread per histogram cell (256×4).
+    atomicStore(&wg_digit_hist[gl_LocalInvocationID.y][gl_LocalInvocationID.x], 0u);
+    workgroupBarrier();
+
     let thread_index = gl_GlobalInvocationID.x * #{RADIX_DIGIT_PLACES}u + gl_GlobalInvocationID.y;
     let start_entry_index = thread_index * #{ENTRIES_PER_INVOCATION_A}u;
     let end_entry_index = start_entry_index + #{ENTRIES_PER_INVOCATION_A}u;
@@ -100,21 +111,38 @@ fn radix_sort_a(
         input_entries[entry_index].value = entry_index;
         for(var shift = 0u; shift < #{RADIX_DIGIT_PLACES}u; shift += 1u) {
             let digit = (key >> (shift * #{RADIX_BITS_PER_DIGIT}u)) & (#{RADIX_BASE}u - 1u);
-            atomicAdd(&sorting.digit_histogram[shift][digit], 1u);
+            atomicAdd(&wg_digit_hist[shift][digit], 1u);
         }
     }
+
+    workgroupBarrier();
+    let local_count = atomicLoad(&wg_digit_hist[gl_LocalInvocationID.y][gl_LocalInvocationID.x]);
+    atomicAdd(&sorting.digit_histogram[gl_LocalInvocationID.y][gl_LocalInvocationID.x], local_count);
 }
 
-@compute @workgroup_size(1)
+// Parallel exclusive prefix per histogram row: O(log RADIX_BASE) depth vs serial O(RADIX_BASE).
+@compute @workgroup_size(#{RADIX_BASE}, 1, 1)
 fn radix_sort_b(
-    @builtin(global_invocation_id) gl_GlobalInvocationID: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
 ) {
-    var sum = 0u;
-    for(var digit = 0u; digit < #{RADIX_BASE}u; digit += 1u) {
-        let tmp = atomicLoad(&sorting.digit_histogram[gl_GlobalInvocationID.y][digit]);
-        atomicStore(&sorting.digit_histogram[gl_GlobalInvocationID.y][digit], sum);
-        sum += tmp;
+    let p = workgroup_id.x;
+    let i = local_id.x;
+    let v = atomicLoad(&sorting.digit_histogram[p][i]);
+    radix_b_row[i] = v;
+    workgroupBarrier();
+
+    for (var d = 0u; d < #{RADIX_BITS_PER_DIGIT}u; d += 1u) {
+        workgroupBarrier();
+        let stride = 1u << d;
+        let t = radix_b_row[i];
+        if (i >= stride) {
+            radix_b_row[i] = radix_b_row[i - stride] + t;
+        }
     }
+    workgroupBarrier();
+    let exclusive = radix_b_row[i] - v;
+    atomicStore(&sorting.digit_histogram[p][i], exclusive);
 }
 
 // --- SHARED MEMORY for radix pass C ---
@@ -126,6 +154,8 @@ var<workgroup> local_digit_offsets: array<u32, #{RADIX_BASE}>;
 // Atomic offsets used during parallel intra-tile scatter
 var<workgroup> scatter_offsets: array<atomic<u32>, #{RADIX_BASE}>;
 var<workgroup> tile_entry_count_ws: u32;
+// Scratch for parallel prefix in `radix_sort_c_scatter` step 2 (same size as bin count).
+var<workgroup> tile_prefix_scan: array<u32, #{RADIX_BASE}>;
 const INVALID_KEY: u32 = 0xFFFFFFFFu;
 
 @compute @workgroup_size(#{WORKGROUP_INVOCATIONS_C})
@@ -200,8 +230,8 @@ fn radix_sort_c_scatter(
     for (var i = tid; i < tile_size; i += threads) {
         let idx = global_entry_offset + i;
         if (idx < gaussian_uniforms.count) {
-            tile_input_entries[i] = input_entries[idx];
             let entry = input_entries[idx];
+            tile_input_entries[i] = entry;
             let digit = (entry.key >> (sorting_pass_index * #{RADIX_BITS_PER_DIGIT}u)) & (#{RADIX_BASE}u - 1u);
             atomicAdd(&tile_digit_counts[digit], 1u);
         } else {
@@ -210,18 +240,34 @@ fn radix_sort_c_scatter(
     }
     workgroupBarrier();
 
-    // Step 2: Thread 0 computes prefix sum over digit counts (only 256 elements — negligible).
-    if (tid == 0u) {
-        var entries_in_tile = 0u;
-        var sum = 0u;
-        for (var i = 0u; i < #{RADIX_BASE}u; i += 1u) {
-            let count = atomicLoad(&tile_digit_counts[i]);
-            local_digit_counts[i] = count;
-            local_digit_offsets[i] = sum;
-            sum += count;
-            entries_in_tile += count;
+    // Step 2: Parallel exclusive prefix over per-bin counts (Hillis–Steele, log₂(RADIX_BASE) rounds).
+    var orig_i = 0u;
+    if (tid < #{RADIX_BASE}u) {
+        orig_i = atomicLoad(&tile_digit_counts[tid]);
+        tile_prefix_scan[tid] = orig_i;
+    }
+    workgroupBarrier();
+
+    for (var d = 0u; d < #{RADIX_BITS_PER_DIGIT}u; d += 1u) {
+        workgroupBarrier();
+        if (tid < #{RADIX_BASE}u) {
+            let stride = 1u << d;
+            let t = tile_prefix_scan[tid];
+            if (tid >= stride) {
+                tile_prefix_scan[tid] = tile_prefix_scan[tid - stride] + t;
+            }
         }
-        tile_entry_count_ws = entries_in_tile;
+    }
+    workgroupBarrier();
+
+    if (tid < #{RADIX_BASE}u) {
+        let inclusive = tile_prefix_scan[tid];
+        let excl = inclusive - orig_i;
+        local_digit_counts[tid] = orig_i;
+        local_digit_offsets[tid] = excl;
+    }
+    if (tid == #{RADIX_BASE}u - 1u) {
+        tile_entry_count_ws = tile_prefix_scan[tid];
     }
     workgroupBarrier();
 

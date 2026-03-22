@@ -369,7 +369,8 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_reset".into()),
-            zero_initialize_workgroup_memory: true,
+            // Shaders clear or overwrite all workgroup state they read.
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_a = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -379,7 +380,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_a".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_b = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -389,7 +390,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_b".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_count = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -399,7 +400,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_c_count_tiles".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_scan = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -409,7 +410,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
             shader: RADIX_SHADER_HANDLE,
             shader_defs: shader_defs.clone(),
             entry_point: Some("radix_sort_c_scan_tiles".into()),
-            zero_initialize_workgroup_memory: true,
+            zero_initialize_workgroup_memory: false,
         });
 
         let radix_sort_c_scatter =
@@ -420,7 +421,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 shader: RADIX_SHADER_HANDLE,
                 shader_defs: shader_defs.clone(),
                 entry_point: Some("radix_sort_c_scatter".into()),
-                zero_initialize_workgroup_memory: true,
+                zero_initialize_workgroup_memory: false,
             });
 
         RadixSortPipeline {
@@ -721,17 +722,12 @@ where
                         radix_config.radix_digit_passes.min(radix_digit_places);
                     let start_pass = radix_digit_places - active_passes;
 
+                    // Single compute pass for the full radix pipeline (reset → A → B → all C sub-passes).
+                    // Fewer `begin_compute_pass` boundaries → less CPU/driver sync vs one pass per digit.
                     {
                         let mut pass =
                             command_encoder.begin_compute_pass(&ComputePassDescriptor::default());
 
-                        // Reset per-frame counters/histograms
-                        let radix_reset = pipeline_cache
-                            .get_compute_pipeline(
-                                pipeline.radix_sort_pipelines[RADIX_PIPELINE_RESET],
-                            )
-                            .unwrap();
-                        pass.set_pipeline(radix_reset);
                         pass.set_bind_group(
                             0,
                             &view_bind_group.value,
@@ -747,13 +743,19 @@ where
                         );
                         pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
                         pass.set_bind_group(3, &radix_bind_group.radix_sort_bind_groups[0], &[]);
+
+                        let radix_reset = pipeline_cache
+                            .get_compute_pipeline(
+                                pipeline.radix_sort_pipelines[RADIX_PIPELINE_RESET],
+                            )
+                            .unwrap();
+                        pass.set_pipeline(radix_reset);
                         pass.dispatch_workgroups(1, 1, 1);
 
                         let radix_sort_a = pipeline_cache
                             .get_compute_pipeline(pipeline.radix_sort_pipelines[RADIX_PIPELINE_A])
                             .unwrap();
                         pass.set_pipeline(radix_sort_a);
-
                         pass.dispatch_workgroups(
                             (cloud.len() as u32).div_ceil(workgroup_entries_a),
                             1,
@@ -764,66 +766,46 @@ where
                             .get_compute_pipeline(pipeline.radix_sort_pipelines[RADIX_PIPELINE_B])
                             .unwrap();
                         pass.set_pipeline(radix_sort_b);
-
-                        pass.dispatch_workgroups(1, radix_digit_places, 1);
-                    }
-
-                    // Run only `active_passes` C-passes, starting from `start_pass`.
-                    // Iteration index tracks parity so the final result lands in sorted_entries
-                    // (parity 0 on even iteration count).
-                    for (iteration, pass_idx) in (start_pass..radix_digit_places).enumerate() {
-                        let mut pass =
-                            command_encoder.begin_compute_pass(&ComputePassDescriptor::default());
-
-                        // Set common bind groups for view/uniforms and cloud storage
-                        pass.set_bind_group(
-                            0,
-                            &view_bind_group.value,
-                            &[
-                                view_uniform_offset.offset,
-                                previous_view_uniform_offset.offset,
-                            ],
-                        );
-                        pass.set_bind_group(
-                            1,
-                            gaussian_uniforms.base_bind_group.as_ref().unwrap(),
-                            &[0],
-                        );
-                        pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
-
-                        // Choose bind group based on digit place and iteration parity.
-                        // iteration parity determines buffer ping-pong direction.
-                        let parity = (iteration % 2) as usize;
-                        let bg_index = (pass_idx as usize) * 2 + parity;
-                        pass.set_bind_group(
-                            3,
-                            &radix_bind_group.radix_sort_bind_groups[bg_index],
-                            &[],
-                        );
+                        // One 256-thread workgroup per digit place (parallel prefix per row).
+                        pass.dispatch_workgroups(radix_digit_places, 1, 1);
 
                         let radix_sort_c_count = pipeline_cache
                             .get_compute_pipeline(
                                 pipeline.radix_sort_pipelines[RADIX_PIPELINE_C_COUNT],
                             )
                             .unwrap();
-                        pass.set_pipeline(radix_sort_c_count);
-                        pass.dispatch_workgroups(1, tile_workgroups, 1);
-
                         let radix_sort_c_scan = pipeline_cache
                             .get_compute_pipeline(
                                 pipeline.radix_sort_pipelines[RADIX_PIPELINE_C_SCAN],
                             )
                             .unwrap();
-                        pass.set_pipeline(radix_sort_c_scan);
-                        pass.dispatch_workgroups(1, radix_base, 1);
-
                         let radix_sort_c_scatter = pipeline_cache
                             .get_compute_pipeline(
                                 pipeline.radix_sort_pipelines[RADIX_PIPELINE_C_SCATTER],
                             )
                             .unwrap();
-                        pass.set_pipeline(radix_sort_c_scatter);
-                        pass.dispatch_workgroups(1, tile_workgroups, 1);
+
+                        // Run only `active_passes` C-passes, starting from `start_pass`.
+                        // Iteration index tracks parity so the final result lands in sorted_entries
+                        // (parity 0 on even iteration count).
+                        for (iteration, pass_idx) in (start_pass..radix_digit_places).enumerate() {
+                            let parity = (iteration % 2) as usize;
+                            let bg_index = (pass_idx as usize) * 2 + parity;
+                            pass.set_bind_group(
+                                3,
+                                &radix_bind_group.radix_sort_bind_groups[bg_index],
+                                &[],
+                            );
+
+                            pass.set_pipeline(radix_sort_c_count);
+                            pass.dispatch_workgroups(1, tile_workgroups, 1);
+
+                            pass.set_pipeline(radix_sort_c_scan);
+                            pass.dispatch_workgroups(1, radix_base, 1);
+
+                            pass.set_pipeline(radix_sort_c_scatter);
+                            pass.dispatch_workgroups(1, tile_workgroups, 1);
+                        }
                     }
                 }
             }
