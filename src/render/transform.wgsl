@@ -12,11 +12,3 @@ fn in_frustum(clip_space_pos: vec3<f32>) -> bool {
         && abs(clip_space_pos.y) < 1.1
         && abs(clip_space_pos.z - 0.5) < 0.5;
 }
-
-/// Looser clip test for **sort keys** (and matching VS discard) so depth keys do not flip between
-/// `0xFFFFFFFF` and real distance when splats graze the frustum edge (reduces edge popping).
-fn in_frustum_sort(clip_space_pos: vec3<f32>) -> bool {
-    return abs(clip_space_pos.x) < 1.22
-        && abs(clip_space_pos.y) < 1.22
-        && abs(clip_space_pos.z - 0.5) < 0.55;
-}
