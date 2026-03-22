@@ -444,6 +444,8 @@ pub struct RadixBindGroup {
     // For each digit pass idx in 0..RADIX_DIGIT_PLACES, we create 2 bind groups (parity 0/1):
     // index = pass_idx * 2 + parity (parity 0: input=sorted_entries, output=entry_buffer_b; parity 1: input=entry_buffer_b, output=sorted_entries)
     pub radix_sort_bind_groups: [BindGroup; 8],
+    /// Matches `CloudUniform.count` for this entity (min of len and `splat_render_budget`).
+    pub dispatch_splat_count: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -501,6 +503,13 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
         let cloud = gaussian_cloud_res.get(cloud_handle.handle()).unwrap();
         let sorted_entries = sorted_entries_res.get(sorted_entries_handle).unwrap();
         let sorting_assets = &sort_buffers.asset_map[&cloud_handle.handle().id()];
+
+        let total = cloud.len() as u32;
+        let dispatch_splat_count = if settings.splat_render_budget > 0 {
+            settings.splat_render_budget.min(total)
+        } else {
+            total
+        };
 
         let sorting_global_entry = BindGroupEntry {
             binding: 1,
@@ -593,6 +602,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
 
         commands.entity(entity).insert(RadixBindGroup {
             radix_sort_bind_groups,
+            dispatch_splat_count,
         });
     }
 }
@@ -695,7 +705,7 @@ where
             {
                 ran_radix = true;
 
-                let cloud = world
+                let _cloud = world
                     .get_resource::<RenderAssets<R::GpuPlanarType>>()
                     .unwrap()
                     .get(cloud_handle.handle())
@@ -707,6 +717,11 @@ where
                         .contains_key(&cloud_handle.handle().id())
                 );
 
+                let dispatch_n = radix_bind_group.dispatch_splat_count;
+                if dispatch_n == 0 {
+                    continue;
+                }
+
                 {
                     let command_encoder = render_context.command_encoder();
                     let shader_defines = ShaderDefines::default();
@@ -714,7 +729,7 @@ where
                     let radix_base = shader_defines.radix_base;
                     let workgroup_entries_a = shader_defines.workgroup_entries_a;
                     let workgroup_entries_c = shader_defines.workgroup_entries_c;
-                    let tile_workgroups = (cloud.len() as u32).div_ceil(workgroup_entries_c);
+                    let tile_workgroups = dispatch_n.div_ceil(workgroup_entries_c);
 
                     // Configurable pass count: skip lower digit passes for faster approximate sort.
                     // e.g. radix_digit_passes=2 sorts only the top 16 bits (65K depth buckets).
@@ -757,7 +772,7 @@ where
                             .unwrap();
                         pass.set_pipeline(radix_sort_a);
                         pass.dispatch_workgroups(
-                            (cloud.len() as u32).div_ceil(workgroup_entries_a),
+                            dispatch_n.div_ceil(workgroup_entries_a),
                             1,
                             1,
                         );

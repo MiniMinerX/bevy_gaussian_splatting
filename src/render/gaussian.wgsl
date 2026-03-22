@@ -229,10 +229,11 @@ fn vs_points(
     var opacity = get_opacity(splat_index);
 
 #ifdef OPACITY_ADAPTIVE_RADIUS
-    let cutoff = sqrt(max(9.0 + 2.0 * log(opacity), 0.000001));
+    var cutoff = sqrt(max(9.0 + 2.0 * log(opacity), 0.000001));
 #else
-    let cutoff = 3.0;
+    var cutoff = 3.0;
 #endif
+    cutoff *= gaussian_uniforms.quad_cutoff_scale;
 
 #ifdef GAUSSIAN_2D
     let surfel = compute_cov2d_surfel(

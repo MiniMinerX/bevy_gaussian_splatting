@@ -966,6 +966,8 @@ pub struct CloudUniform {
     pub transform: Mat4,
     pub global_opacity: f32,
     pub global_scale: f32,
+    pub quad_cutoff_scale: f32,
+    pub _pad_gaussian_uniform: u32,
     pub count: u32,
     pub count_root_ceil: u32,
     pub time: f32,
@@ -1022,12 +1024,21 @@ pub fn extract_gaussians<R: PlanarSync>(
 
         let cloud = gaussian_cloud_res.get(cloud_handle.handle()).unwrap();
 
+        let total = cloud.len() as u32;
+        let count = if settings.splat_render_budget > 0 {
+            settings.splat_render_budget.min(total)
+        } else {
+            total
+        };
+
         let settings_uniform = CloudUniform {
             transform: transform.to_matrix(),
             global_opacity: settings.global_opacity,
             global_scale: settings.global_scale,
-            count: cloud.len() as u32,
-            count_root_ceil: (cloud.len() as f32).sqrt().ceil() as u32,
+            quad_cutoff_scale: settings.quad_cutoff_scale,
+            _pad_gaussian_uniform: 0,
+            count,
+            count_root_ceil: (count as f32).sqrt().ceil() as u32,
             time: settings.time,
             time_start: settings.time_start,
             time_stop: settings.time_stop,

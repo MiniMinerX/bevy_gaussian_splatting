@@ -59,6 +59,13 @@ pub enum GaussianColorSpace {
 #[serde(default)]
 pub struct CloudSettings {
     pub aabb: bool,
+    /// Cap splats sorted & drawn per frame (`min(len, budget)`). `0` = use full cloud.
+    ///
+    /// Only indices `0 .. count` participate; training order is arbitrary — for quality at a cap,
+    /// prefer offline LOD / decimation or a future GPU selection pass.
+    pub splat_render_budget: u32,
+    /// Multiplier on the screen-space Gaussian cutoff (smaller → tighter quads, less overdraw).
+    pub quad_cutoff_scale: f32,
     pub global_opacity: f32,
     pub global_scale: f32,
     pub opacity_adaptive_radius: bool,
@@ -76,10 +83,17 @@ pub struct CloudSettings {
     pub time_stop: f32,
 }
 
+impl CloudSettings {
+    /// Reasonable cap for very dense captures when you prefer FPS over using every splat.
+    pub const DENSE_DEFAULT_SPLAT_BUDGET: u32 = 2_000_000;
+}
+
 impl Default for CloudSettings {
     fn default() -> Self {
         Self {
             aabb: false,
+            splat_render_budget: 0,
+            quad_cutoff_scale: 1.0,
             global_opacity: 1.0,
             global_scale: 1.0,
             opacity_adaptive_radius: true,
