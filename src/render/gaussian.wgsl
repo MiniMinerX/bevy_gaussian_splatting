@@ -15,7 +15,7 @@
 }
 #import bevy_gaussian_splatting::transform::{
     world_to_clip,
-    in_frustum,
+    in_frustum_sort,
 }
 
 #ifdef GAUSSIAN_2D
@@ -207,7 +207,7 @@ fn vs_points(
 #ifdef GAUSSIAN_4D
 #else
     let projected_position = world_to_clip(transformed_position);
-    discard_quad |= !in_frustum(projected_position.xyz);
+    discard_quad |= !in_frustum_sort(projected_position.xyz);
 #endif
 
     if (discard_quad) {
@@ -276,7 +276,7 @@ fn vs_points(
         // TODO: set previous_transformed_position based on temporal position delta
         let projected_position = world_to_clip(transformed_position);
 
-        if !in_frustum(projected_position.xyz) {
+        if !in_frustum_sort(projected_position.xyz) {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             return output;
