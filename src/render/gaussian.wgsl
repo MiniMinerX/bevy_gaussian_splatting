@@ -443,7 +443,7 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
     let mean_2d = input.mean_2d;
     let aspect = vec2<f32>(
         1.0,
-        view.viewport.z / view.viewport.w,
+        view.main_pass_viewport.z / view.main_pass_viewport.w,
     );
     let pixel_coord = input.uv * radius * aspect + mean_2d;
 

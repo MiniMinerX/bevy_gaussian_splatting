@@ -17,9 +17,12 @@ fn cov2d(
 
     var t = view.view_from_world * vec4<f32>(position, 1.0);
 
+    // Use main_pass_viewport dimensions so focal length and pixel radii match the actual
+    // rasterized main pass (Bevy: viewport can differ from main_pass when resolution override /
+    // upscaling / scaled rendering is used).
     let focal = vec2<f32>(
-        view.clip_from_view[0].x * view.viewport.z,
-        view.clip_from_view[1].y * view.viewport.w,
+        view.clip_from_view[0].x * view.main_pass_viewport.z,
+        view.clip_from_view[1].y * view.main_pass_viewport.w,
     );
 
     let s = 1.0 / (t.z * t.z);
@@ -69,7 +72,7 @@ fn get_bounding_box_clip(
 #ifdef USE_AABB
     let radius_px = cutoff * max(x_axis_length, y_axis_length);
     let radius_ndc = vec2<f32>(
-        radius_px / view.viewport.zw,
+        radius_px / view.main_pass_viewport.zw,
     );
 
     return vec4<f32>(
@@ -109,7 +112,7 @@ fn get_bounding_box_clip(
     let scaled_vertex = direction * bounds;
     let rotated_vertex = scaled_vertex * rotation_matrix;
 
-    let scaling_factor = 1.0 / view.viewport.zw;
+    let scaling_factor = 1.0 / view.main_pass_viewport.zw;
     let ndc_vertex = rotated_vertex * scaling_factor;
 
     return vec4<f32>(
@@ -121,13 +124,13 @@ fn get_bounding_box_clip(
 
 fn intrinsic_matrix() -> mat3x4<f32> {
     let focal = vec2<f32>(
-        view.clip_from_view[0].x * view.viewport.z / 2.0,
-        view.clip_from_view[1].y * view.viewport.w / 2.0,
+        view.clip_from_view[0].x * view.main_pass_viewport.z / 2.0,
+        view.clip_from_view[1].y * view.main_pass_viewport.w / 2.0,
     );
 
     let Ks = mat3x4<f32>(
-        vec4<f32>(focal.x, 0.0, 0.0, (view.viewport.z - 1.0) / 2.0),
-        vec4<f32>(0.0, focal.y, 0.0, (view.viewport.w - 1.0) / 2.0),
+        vec4<f32>(focal.x, 0.0, 0.0, (view.main_pass_viewport.z - 1.0) / 2.0),
+        vec4<f32>(0.0, focal.y, 0.0, (view.main_pass_viewport.w - 1.0) / 2.0),
         vec4<f32>(0.0, 0.0, 0.0, 1.0)
     );
 

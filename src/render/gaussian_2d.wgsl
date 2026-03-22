@@ -65,7 +65,7 @@ fn get_bounding_box_cov2d(
 
     // TODO: verify OBB capability
     let radius_ndc = vec2<f32>(
-        max_radius / view.viewport.zw,
+        max_radius / view.main_pass_viewport.zw,
     );
 
     return vec4<f32>(
