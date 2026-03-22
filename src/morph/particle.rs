@@ -8,7 +8,10 @@ use std::marker::Copy;
 #[allow(unused_imports)]
 use bevy::{
     asset::{LoadState, RenderAssetUsages, load_internal_asset, uuid_handle},
-    core_pipeline::core_3d::graph::{Core3d, Node3d},
+    core_pipeline::{
+        core_3d::graph::{Core3d, Node3d},
+        prepass::{MotionVectorPrepass, PreviousViewUniformOffset},
+    },
     ecs::system::{SystemParamItem, lifetimeless::SRes},
     prelude::*,
     render::{
@@ -265,6 +268,8 @@ pub struct ParticleBehaviorNode<R: PlanarSync> {
         &'static GaussianCamera,
         &'static GaussianViewBindGroup,
         &'static ViewUniformOffset,
+        Option<Has<MotionVectorPrepass>>,
+        Option<&'static PreviousViewUniformOffset>,
     )>,
     phantom: std::marker::PhantomData<R>,
 }
@@ -316,9 +321,14 @@ impl<R: PlanarSync> Node for ParticleBehaviorNode<R> {
 
         let command_encoder = render_context.command_encoder();
 
-        for (_gaussian_camera, view_bind_group, view_uniform_offset) in
+        for (_gaussian_camera, view_bind_group, view_uniform_offset, has_mv_prepass, prev_view) in
             self.view_bind_group.iter_manual(world)
         {
+            let previous_offset = match prev_view {
+                Some(offset) if has_mv_prepass.unwrap_or_default() => offset.offset,
+                _ => 0,
+            };
+            let view_dynamic_offsets = [view_uniform_offset.offset, previous_offset];
             for (planar_storage_bind_group, behaviors_handle, particle_behavior_bind_group) in
                 self.gaussian_clouds.iter_manual(world)
             {
@@ -333,7 +343,7 @@ impl<R: PlanarSync> Node for ParticleBehaviorNode<R> {
                     let mut pass =
                         command_encoder.begin_compute_pass(&ComputePassDescriptor::default());
 
-                    pass.set_bind_group(0, &view_bind_group.value, &[view_uniform_offset.offset]);
+                    pass.set_bind_group(0, &view_bind_group.value, &view_dynamic_offsets);
                     pass.set_bind_group(
                         1,
                         gaussian_uniforms.base_bind_group.as_ref().unwrap(),

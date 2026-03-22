@@ -955,8 +955,7 @@ impl<R: PlanarSync> SpecializedRenderPipeline for CloudPipeline<R> {
 #[allow(type_alias_bounds)]
 type DrawGaussians<R: bevy_interleave::prelude::PlanarSync> = (
     SetItemPipeline,
-    //SetViewBindGroup<0>,
-    SetPreviousViewBindGroup<0>,
+    SetViewBindGroup<0>,
     SetGaussianUniformBindGroup<1>,
     DrawGaussianInstanced<R>,
 );
@@ -1354,18 +1353,33 @@ pub fn queue_gaussian_compute_view_bind_groups<R: PlanarSync>(
 pub struct SetViewBindGroup<const I: usize>;
 impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
     type Param = ();
-    type ViewQuery = (Read<GaussianViewBindGroup>, Read<ViewUniformOffset>);
+    type ViewQuery = (
+        Read<GaussianViewBindGroup>,
+        Read<ViewUniformOffset>,
+        Option<Has<MotionVectorPrepass>>,
+        Option<Read<PreviousViewUniformOffset>>,
+    );
     type ItemQuery = ();
 
     #[inline]
     fn render<'w>(
         _: &P,
-        (gaussian_view_bind_group, view_uniform): ROQueryItem<'w, 'w, Self::ViewQuery>,
+        (gaussian_view_bind_group, view_uniform, has_motion_vector_prepass, previous_view_uniform): ROQueryItem<
+            'w,
+            'w,
+            Self::ViewQuery,
+        >,
         _entity: Option<()>,
         _: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        pass.set_bind_group(I, &gaussian_view_bind_group.value, &[view_uniform.offset]);
+        // Bindings 0 and 2 use dynamic offsets (ViewUniform, PreviousViewData).
+        let previous_offset = match previous_view_uniform {
+            Some(offset) if has_motion_vector_prepass.unwrap_or_default() => offset.offset,
+            _ => 0,
+        };
+        let dynamic_offsets = [view_uniform.offset, previous_offset];
+        pass.set_bind_group(I, &gaussian_view_bind_group.value, &dynamic_offsets);
 
         debug!("set view bind group");
 
