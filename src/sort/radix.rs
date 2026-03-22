@@ -766,8 +766,7 @@ where
                             .get_compute_pipeline(pipeline.radix_sort_pipelines[RADIX_PIPELINE_B])
                             .unwrap();
                         pass.set_pipeline(radix_sort_b);
-                        // One 256-thread workgroup per digit place (parallel prefix per row).
-                        pass.dispatch_workgroups(radix_digit_places, 1, 1);
+                        pass.dispatch_workgroups(1, radix_digit_places, 1);
 
                         let radix_sort_c_count = pipeline_cache
                             .get_compute_pipeline(

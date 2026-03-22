@@ -713,9 +713,9 @@ impl Default for ShaderDefines {
         let radix_bits_per_digit = 8;
         let radix_digit_places = 32 / radix_bits_per_digit;
         let radix_base = 1 << radix_bits_per_digit;
-        // More entries per radix_sort_a thread → fewer A dispatches (same total work per splat).
-        // C-phase tile size uses `entries_per_invocation_c` (smaller = less WG RAM, more dispatches).
-        let entries_per_invocation_a = 4;
+        // Finer radix tiles (smaller `entries_per_invocation_c`) reduce tile-boundary popping;
+        // larger values mean fewer C dispatches but harsher artifacts if sort keys tie.
+        let entries_per_invocation_a = 2;
         let entries_per_invocation_c = 2;
         let workgroup_invocations_a = radix_base * radix_digit_places;
         let workgroup_invocations_c = radix_base;
