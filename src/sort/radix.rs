@@ -156,8 +156,14 @@ impl Default for RadixSortPendingClears {
 
 fn apply_radix_sort_trigger_clears(
     pending: Res<RadixSortPendingClears>,
-    mut main_world: ResMut<MainWorld>,
+    main_world: Option<ResMut<MainWorld>>,
 ) {
+    // `MainWorld` is not always present in the render `World` (e.g. early startup or some XR /
+    // multi-app setups). Skip until it exists; pending clears stay queued.
+    let Some(mut main_world) = main_world else {
+        return;
+    };
+
     let entities: Vec<Entity> = {
         let mut guard = pending.0.lock().unwrap();
         core::mem::take(&mut *guard)
