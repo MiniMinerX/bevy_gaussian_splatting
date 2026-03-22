@@ -78,8 +78,7 @@ fn radix_sort_a(
     @builtin(global_invocation_id) gl_GlobalInvocationID: vec3<u32>,
 ) {
     if (gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u && gl_GlobalInvocationID.x == 0u) {
-        let vcount = max(gaussian_uniforms.vertex_count, 3u);
-        draw_indirect.vertex_count = vcount;
+        draw_indirect.vertex_count = gaussian_uniforms.vertex_count;
         atomicStore(&draw_indirect.instance_count, gaussian_uniforms.count);
     }
     workgroupBarrier();

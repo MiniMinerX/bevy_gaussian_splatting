@@ -217,25 +217,23 @@ fn vs_points(
     }
 
 #ifdef USE_TRIANGLE
-    let vertex_count: u32 = 3u;
-    let sqrt3 = sqrt(3.0);
-    var bounds_vertices = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 2.0),
-        vec2<f32>( sqrt3, -1.0),
-        vec2<f32>(-sqrt3, -1.0),
+    var tri_vertices = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0, -1.0),
     );
+    let vi = vertex_index % gaussian_uniforms.vertex_count;
+    let quad_offset = tri_vertices[vi];
 #else
-    let vertex_count: u32 = 4u;
-    var bounds_vertices = array<vec2<f32>, 4>(
+    var quad_vertices = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(-1.0,  1.0),
         vec2<f32>( 1.0, -1.0),
         vec2<f32>( 1.0,  1.0),
     );
+    let vi = vertex_index % gaussian_uniforms.vertex_count;
+    let quad_offset = quad_vertices[vi];
 #endif
-
-    let bounds_index = vertex_index % vertex_count;
-    let bounds_offset = bounds_vertices[bounds_index];
 
     var opacity = get_opacity(splat_index);
 
@@ -260,7 +258,7 @@ fn vs_points(
 
     let bb = get_bounding_box_cov2d(
         surfel.extent,
-        bounds_offset,
+        quad_offset,
         cutoff,
     );
     output.radius = bb.zw;
@@ -304,7 +302,7 @@ fn vs_points(
 
     let bb = get_bounding_box_clip(
         gaussian_cov2d,
-        bounds_offset,
+        quad_offset,
         cutoff,
     );
 
@@ -317,17 +315,6 @@ fn vs_points(
             gaussian_cov2d.x * det_inv
         );
         output.conic = conic;
-        output.major_minor = bb.zw;
-    #endif
-    #ifdef USE_TRIANGLE
-        let det_t = gaussian_cov2d.x * gaussian_cov2d.z - gaussian_cov2d.y * gaussian_cov2d.y;
-        let det_inv_t = 1.0 / det_t;
-        let conic_t = vec3<f32>(
-            gaussian_cov2d.z * det_inv_t,
-            -gaussian_cov2d.y * det_inv_t,
-            gaussian_cov2d.x * det_inv_t
-        );
-        output.conic = conic_t;
         output.major_minor = bb.zw;
     #endif
 #endif
@@ -449,7 +436,7 @@ fn vs_points(
     }
 #endif
 
-    output.uv = bounds_offset;
+    output.uv = quad_offset;
     output.position = vec4<f32>(
         projected_position.xy + bb.xy,
         projected_position.zw,
@@ -494,40 +481,6 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
     }
 #endif
 
-#ifdef USE_TRIANGLE
-#ifdef GAUSSIAN_2D
-    let radius_tr = input.radius;
-    let mean_2d_tr = input.mean_2d;
-    let aspect_tr = vec2<f32>(
-        1.0,
-        view.main_pass_viewport.z / view.main_pass_viewport.w,
-    );
-    let pixel_coord_tr = input.uv * radius_tr * aspect_tr + mean_2d_tr;
-
-    let power = surfel_fragment_power(
-        mat3x3<f32>(
-            input.local_to_pixel_u,
-            input.local_to_pixel_v,
-            input.local_to_pixel_w,
-        ),
-        pixel_coord_tr,
-        mean_2d_tr,
-    );
-#else ifdef GAUSSIAN_3D
-    let d_tr = -input.major_minor;
-    let conic_tr = input.conic;
-    let power = -0.5 * (conic_tr.x * d_tr.x * d_tr.x + conic_tr.z * d_tr.y * d_tr.y) + conic_tr.y * d_tr.x * d_tr.y;
-#else ifdef GAUSSIAN_4D
-    let d_tr = -input.major_minor;
-    let conic_tr = input.conic;
-    let power = -0.5 * (conic_tr.x * d_tr.x * d_tr.x + conic_tr.z * d_tr.y * d_tr.y) + conic_tr.y * d_tr.x * d_tr.y;
-#endif
-
-    if (power > 0.0) {
-        discard;
-    }
-#endif
-
 #ifdef USE_OBB
     let sigma = 1.0 / 3.0;
     let sigma_squared = 2.0 * sigma * sigma;
@@ -541,21 +494,6 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
 #endif
 
 #ifdef VISUALIZE_BOUNDING_BOX
-#ifdef USE_TRIANGLE
-    let sqrt3_v = sqrt(3.0);
-    let v0 = vec2<f32>(0.0, 2.0);
-    let v1 = vec2<f32>( sqrt3_v, -1.0);
-    let v2 = vec2<f32>(-sqrt3_v, -1.0);
-    let denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
-    let bary0 = ((v1.y - v2.y) * (input.uv.x - v2.x) + (v2.x - v1.x) * (input.uv.y - v2.y)) / denom;
-    let bary1 = ((v2.y - v0.y) * (input.uv.x - v2.x) + (v0.x - v2.x) * (input.uv.y - v2.y)) / denom;
-    let bary2 = 1.0 - bary0 - bary1;
-    let edge_width = 0.05;
-    let min_bary = min(min(bary0, bary1), bary2);
-    if (min_bary < edge_width) {
-        return vec4<f32>(0.3, 1.0, 0.1, 1.0);
-    }
-#else
     let uv = input.uv * 0.5 + 0.5;
     let edge_width = 0.08;
     if (
@@ -564,7 +502,6 @@ fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
     ) {
         return vec4<f32>(0.3, 1.0, 0.1, 1.0);
     }
-#endif
 #endif
 
     let alpha = min(exp(power) * input.color.a, 0.999);

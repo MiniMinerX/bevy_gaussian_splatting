@@ -53,8 +53,7 @@ pub enum GaussianColorSpace {
     LinRec709Display,
 }
 
-/// Screen-space footprint for each splat: axis-aligned quad, oriented quad (ellipse axes), or
-/// three vertices (one triangle) with the same OBB axes — fewer triangles, slightly less coverage.
+/// Screen-space footprint for each splat: axis-aligned quad vs oriented quad (ellipse axes).
 #[derive(
     Clone,
     Copy,
@@ -74,16 +73,17 @@ pub enum GaussianBounds {
     /// Rotated quad aligned with projected covariance axes (default).
     #[default]
     Obb,
-    /// One triangle (two raster triangles fewer than a quad strip); uses same OBB scale/rotation.
+    /// Triangle strip with three vertices (less overdraw than a quad).
     Triangle,
 }
 
 impl GaussianBounds {
+    /// Vertices per splat instance (`draw` / indirect `vertex_count`).
     #[inline]
-    pub const fn vertex_count(self) -> u32 {
+    pub const fn splat_vertex_count(self) -> u32 {
         match self {
-            GaussianBounds::Triangle => 3,
-            GaussianBounds::Aabb | GaussianBounds::Obb => 4,
+            Self::Triangle => 3,
+            Self::Aabb | Self::Obb => 4,
         }
     }
 }
