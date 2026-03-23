@@ -280,6 +280,10 @@ name = "render_trellis_thumbnails"
 path = "tools/render_trellis_thumbnails.rs"
 required-features = ["io_ply"]
 
+[[bin]]
+name = "bench_render"
+path = "tools/bench_render.rs"
+required-features = ["headless", "perftest"]
 
 [[bin]]
 name = "test_gaussian"

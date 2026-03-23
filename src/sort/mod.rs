@@ -77,6 +77,8 @@ impl Default for SortMode {
 #[reflect(Resource)]
 pub struct SortConfig {
     pub period_ms: usize,
+    /// Minimum camera movement distance to trigger a re-sort (0.0 = any movement)
+    pub movement_threshold: f32,
     /// Number of radix digit passes (1..=4). 4 = full 32-bit sort, 2 = 16-bit (~2x faster, visually near-identical).
     #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
     pub radix_digit_passes: u32,
@@ -94,7 +96,8 @@ pub struct SortConfig {
 impl Default for SortConfig {
     fn default() -> Self {
         Self {
-            period_ms: 100,
+            period_ms: 1000,
+            movement_threshold: 0.01,
             #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
             radix_digit_passes: 4,
             #[cfg(all(feature = "sort_radix", not(feature = "buffer_texture")))]
@@ -228,7 +231,8 @@ fn update_sort_trigger(
         }
 
         let camera_position = camera_transform.affine().translation;
-        let camera_movement = sort_trigger.last_camera_position != camera_position;
+        let camera_movement = sort_trigger.last_camera_position
+            .distance(camera_position) > sort_config.movement_threshold;
 
         if camera_movement {
             sort_trigger.needs_sort = true;

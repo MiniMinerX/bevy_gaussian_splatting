@@ -70,7 +70,10 @@ fn get_bounding_box_clip(
     let y_axis_length = sqrt(lambda2);
 
 #ifdef USE_AABB
-    let radius_px = cutoff * max(x_axis_length, y_axis_length);
+    var radius_px = cutoff * max(x_axis_length, y_axis_length);
+    if gaussian_uniforms.max_pixel_radius > 0.0 {
+        radius_px = min(radius_px, gaussian_uniforms.max_pixel_radius);
+    }
     let radius_ndc = vec2<f32>(
         radius_px / view.main_pass_viewport.zw,
     );
@@ -85,8 +88,12 @@ fn get_bounding_box_clip(
 
     let a = (cov2d.x - cov2d.z) * (cov2d.x - cov2d.z);
     let b = sqrt(a + 4.0 * cov2d.y * cov2d.y);
-    let major_radius = sqrt((cov2d.x + cov2d.z + b) * 0.5);
-    let minor_radius = sqrt((cov2d.x + cov2d.z - b) * 0.5);
+    var major_radius = sqrt((cov2d.x + cov2d.z + b) * 0.5);
+    var minor_radius = sqrt((cov2d.x + cov2d.z - b) * 0.5);
+    if gaussian_uniforms.max_pixel_radius > 0.0 {
+        major_radius = min(major_radius, gaussian_uniforms.max_pixel_radius);
+        minor_radius = min(minor_radius, gaussian_uniforms.max_pixel_radius);
+    }
 
     let bounds = cutoff * vec2<f32>(
         major_radius,
@@ -168,4 +175,25 @@ fn get_scale_matrix(
         0.0, scale.y * gaussian_uniforms.global_scale, 0.0,
         0.0, 0.0, scale.z * gaussian_uniforms.global_scale,
     );
+}
+
+fn hash_u(n: u32) -> f32 {
+    var x = n;
+    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+    x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+    x = (x >> 16u) ^ x;
+    return f32(x) / 4294967295.0;
+}
+
+fn value_noise(t: f32, seed: u32) -> f32 {
+    let i = u32(floor(t)) + seed;
+    let f = fract(t);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(hash_u(i), hash_u(i + 1u), u) * 2.0 - 1.0;
+}
+
+fn fbm_noise(t: f32, seed: u32) -> f32 {
+    return value_noise(t, seed) * 0.6
+         + value_noise(t * 2.0, seed + 7919u) * 0.25
+         + value_noise(t * 4.0, seed + 15973u) * 0.15;
 }
