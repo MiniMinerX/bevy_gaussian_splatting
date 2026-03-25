@@ -143,8 +143,14 @@ pub struct CloudSettings {
     pub max_pixel_radius: f32,
     /// Override max_pixel_radius with per-splat distance-based clamping (reduces overdraw at range)
     pub dynamic_lod_radius: bool,
-    /// Scale factor for dynamic LOD: effective max radius ≈ scale / distance_to_camera
+    /// Scale factor for dynamic LOD: base max radius (pixels) ≈ `dynamic_lod_scale / distance_to_camera`
     pub dynamic_lod_scale: f32,
+    /// World-space reference extent for per-splat pixel-cap scaling (see [`Self::dynamic_lod_splat_extent_enabled`]).
+    /// Only sent to the GPU when [`Self::dynamic_lod_splat_extent_enabled`] is true; otherwise treated as `0`.
+    pub dynamic_lod_splat_reference: f32,
+    /// When true, the shader uses [`Self::dynamic_lod_splat_reference`] to scale the pixel-radius cap by
+    /// splat size. When false, behavior matches pre–per-splat scaling (distance / fixed cap only).
+    pub dynamic_lod_splat_extent_enabled: bool,
     /// Distance at which LOD subsampling begins (0.0 = disabled)
     pub lod_near_distance: f32,
     /// Distance at which LOD subsampling reaches maximum
@@ -203,6 +209,8 @@ impl Default for CloudSettings {
             max_pixel_radius: 0.0,
             dynamic_lod_radius: false,
             dynamic_lod_scale: 500.0,
+            dynamic_lod_splat_reference: 0.0,
+            dynamic_lod_splat_extent_enabled: false,
             lod_near_distance: 0.0,
             lod_far_distance: 50.0,
             lod_max_subsample: 8,

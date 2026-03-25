@@ -333,11 +333,26 @@ fn vs_points(
         cam_dist = length(transformed_position - view.world_position);
     #endif
 
+    var lod_splat_extent = 0.0;
+#ifdef GAUSSIAN_3D
+#ifdef PRECOMPUTE_COVARIANCE_3D
+    let lod_cov = get_cov3d(splat_index);
+    lod_splat_extent = sqrt(max(max(max(lod_cov[0], lod_cov[3]), lod_cov[5]), 1e-20));
+#else
+    let lod_sc = get_scale(splat_index);
+    lod_splat_extent = max(max(lod_sc.x, lod_sc.y), lod_sc.z) * gaussian_uniforms.global_scale;
+#endif
+#else ifdef GAUSSIAN_4D
+    let lod_sc4 = get_scale(splat_index);
+    lod_splat_extent = max(max(lod_sc4.x, lod_sc4.y), lod_sc4.z) * gaussian_uniforms.global_scale;
+#endif
+
     let bb = get_bounding_box_clip(
         gaussian_cov2d,
         quad_offset,
         cutoff,
         cam_dist,
+        lod_splat_extent,
     );
 
     #ifdef USE_AABB

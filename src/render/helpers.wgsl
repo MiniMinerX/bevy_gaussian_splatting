@@ -54,12 +54,19 @@ fn get_bounding_box_clip(
     direction: vec2<f32>,
     cutoff: f32,
     cam_distance: f32,
+    splat_extent_world: f32,
 ) -> vec4<f32> {
     // return vec4<f32>(offset, uv);
 
     var effective_max_radius = gaussian_uniforms.max_pixel_radius;
     if gaussian_uniforms.dynamic_lod_radius > 0u {
         effective_max_radius = gaussian_uniforms.dynamic_lod_scale / max(cam_distance, 0.01);
+    }
+
+    let ref_extent = gaussian_uniforms.dynamic_lod_splat_reference;
+    if effective_max_radius > 0.0 && ref_extent > 0.0 && splat_extent_world > 0.0 {
+        let mul = splat_extent_world / ref_extent;
+        effective_max_radius *= clamp(mul, 0.125, 32.0);
     }
 
     let det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;

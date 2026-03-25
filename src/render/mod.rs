@@ -1006,6 +1006,7 @@ pub struct CloudUniform {
     pub max_pixel_radius: f32,
     pub dynamic_lod_radius: u32,
     pub dynamic_lod_scale: f32,
+    pub dynamic_lod_splat_reference: f32,
     pub wave_direction: Vec4,
     pub pulse_origin: Vec4,
 }
@@ -1100,6 +1101,11 @@ pub fn extract_gaussians<R: PlanarSync>(
             max_pixel_radius: settings.max_pixel_radius,
             dynamic_lod_radius: settings.dynamic_lod_radius as u32,
             dynamic_lod_scale: settings.dynamic_lod_scale,
+            dynamic_lod_splat_reference: if settings.dynamic_lod_splat_extent_enabled {
+                settings.dynamic_lod_splat_reference
+            } else {
+                0.0
+            },
             wave_direction: settings.wave_direction.extend(0.0),
             pulse_origin: settings.pulse_origin.extend(settings.pulse_start_time),
         };

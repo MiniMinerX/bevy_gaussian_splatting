@@ -45,6 +45,7 @@ struct GaussianUniforms {
     max_pixel_radius: f32,
     dynamic_lod_radius: u32,
     dynamic_lod_scale: f32,
+    dynamic_lod_splat_reference: f32,
     wave_direction: vec4<f32>,
     pulse_origin: vec4<f32>,
 };
