@@ -141,6 +141,10 @@ pub struct CloudSettings {
     pub max_distance: f32,
     /// Clamp splat screen-space radius to this many pixels (0.0 = disabled)
     pub max_pixel_radius: f32,
+    /// Override max_pixel_radius with per-splat distance-based clamping (reduces overdraw at range)
+    pub dynamic_lod_radius: bool,
+    /// Scale factor for dynamic LOD: effective max radius ≈ scale / distance_to_camera
+    pub dynamic_lod_scale: f32,
     /// Distance at which LOD subsampling begins (0.0 = disabled)
     pub lod_near_distance: f32,
     /// Distance at which LOD subsampling reaches maximum
@@ -197,6 +201,8 @@ impl Default for CloudSettings {
             opacity_cutoff: 0.0,
             max_distance: 0.0,
             max_pixel_radius: 0.0,
+            dynamic_lod_radius: false,
+            dynamic_lod_scale: 500.0,
             lod_near_distance: 0.0,
             lod_far_distance: 50.0,
             lod_max_subsample: 8,

@@ -221,8 +221,8 @@ fn vs_points(
 
     var previous_transformed_position = transformed_position;
 
+    var cam_dist = length(transformed_position - view.world_position);
     if gaussian_uniforms.max_distance > 0.0 {
-        let cam_dist = length(transformed_position - view.world_position);
         discard_quad |= cam_dist > gaussian_uniforms.max_distance;
     }
 
@@ -330,12 +330,14 @@ fn vs_points(
             transformed_position,
             gaussian_4d.cov3d,
         );
+        cam_dist = length(transformed_position - view.world_position);
     #endif
 
     let bb = get_bounding_box_clip(
         gaussian_cov2d,
         quad_offset,
         cutoff,
+        cam_dist,
     );
 
     #ifdef USE_AABB

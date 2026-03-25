@@ -53,8 +53,14 @@ fn get_bounding_box_clip(
     cov2d: vec3<f32>,
     direction: vec2<f32>,
     cutoff: f32,
+    cam_distance: f32,
 ) -> vec4<f32> {
     // return vec4<f32>(offset, uv);
+
+    var effective_max_radius = gaussian_uniforms.max_pixel_radius;
+    if gaussian_uniforms.dynamic_lod_radius > 0u {
+        effective_max_radius = gaussian_uniforms.dynamic_lod_scale / max(cam_distance, 0.01);
+    }
 
     let det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
     let trace = cov2d.x + cov2d.z;
@@ -71,8 +77,8 @@ fn get_bounding_box_clip(
 
 #ifdef USE_AABB
     var radius_px = cutoff * max(x_axis_length, y_axis_length);
-    if gaussian_uniforms.max_pixel_radius > 0.0 {
-        radius_px = min(radius_px, gaussian_uniforms.max_pixel_radius);
+    if effective_max_radius > 0.0 {
+        radius_px = min(radius_px, effective_max_radius);
     }
     let radius_ndc = vec2<f32>(
         radius_px / view.main_pass_viewport.zw,
@@ -90,9 +96,9 @@ fn get_bounding_box_clip(
     let b = sqrt(a + 4.0 * cov2d.y * cov2d.y);
     var major_radius = sqrt((cov2d.x + cov2d.z + b) * 0.5);
     var minor_radius = sqrt((cov2d.x + cov2d.z - b) * 0.5);
-    if gaussian_uniforms.max_pixel_radius > 0.0 {
-        major_radius = min(major_radius, gaussian_uniforms.max_pixel_radius);
-        minor_radius = min(minor_radius, gaussian_uniforms.max_pixel_radius);
+    if effective_max_radius > 0.0 {
+        major_radius = min(major_radius, effective_max_radius);
+        minor_radius = min(minor_radius, effective_max_radius);
     }
 
     let bounds = cutoff * vec2<f32>(
