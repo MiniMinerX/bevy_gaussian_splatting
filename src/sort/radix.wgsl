@@ -102,7 +102,14 @@ fn radix_sort_a(
         let dist_bits = bitcast<u32>(dist2);
         let key_distance = 0xFFFFFFFFu - dist_bits;
         if (in_frustum(clip_space_pos.xyz)) {
-            key = key_distance;
+            // Splats that share the same float distance (common for far geometry) or the same
+            // radix digit when using fewer passes (`radix_digit_passes` < 4) would otherwise get
+            // identical keys; scatter then uses atomics and the order is non-deterministic → flicker.
+            // XOR a splat-unique pattern so every in-frustum key is distinct without relying on
+            // float spacing (still dominated by `key_distance` when distances differ meaningfully).
+            let idx = entry_index & 0xFFFFu;
+            let spread = idx ^ (idx << 16u);
+            key = key_distance ^ spread;
         }
         input_entries[entry_index].key = key;
         input_entries[entry_index].value = entry_index;
