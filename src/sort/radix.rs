@@ -319,7 +319,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: BufferSize::new(std::mem::size_of::<u32>() as u64),
                 },
                 count: None,
@@ -332,7 +332,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: BufferSize::new(std::mem::size_of::<SortEntry>() as u64),
                 },
                 count: None,
@@ -342,7 +342,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: BufferSize::new(std::mem::size_of::<SortEntry>() as u64),
                 },
                 count: None,
@@ -722,6 +722,10 @@ where
                     continue;
                 }
 
+                let chunk_byte_size =
+                    dispatch_n as u64 * std::mem::size_of::<SortEntry>() as u64;
+                let cam_offset = sort_trigger.camera_index as u64 * chunk_byte_size;
+
                 {
                     let command_encoder = render_context.command_encoder();
                     let shader_defines = ShaderDefines::default();
@@ -757,7 +761,11 @@ where
                             &[0],
                         );
                         pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
-                        pass.set_bind_group(3, &radix_bind_group.radix_sort_bind_groups[0], &[]);
+                        pass.set_bind_group(
+                            3,
+                            &radix_bind_group.radix_sort_bind_groups[0],
+                            &[cam_offset as u32, 0],
+                        );
 
                         let radix_reset = pipeline_cache
                             .get_compute_pipeline(
@@ -805,10 +813,15 @@ where
                         for (iteration, pass_idx) in (start_pass..radix_digit_places).enumerate() {
                             let parity = (iteration % 2) as usize;
                             let bg_index = (pass_idx as usize) * 2 + parity;
+                            let (off4, off5) = if parity == 0 {
+                                (cam_offset as u32, 0u32)
+                            } else {
+                                (0u32, cam_offset as u32)
+                            };
                             pass.set_bind_group(
                                 3,
                                 &radix_bind_group.radix_sort_bind_groups[bg_index],
-                                &[],
+                                &[off4, off5],
                             );
 
                             pass.set_pipeline(radix_sort_c_count);
