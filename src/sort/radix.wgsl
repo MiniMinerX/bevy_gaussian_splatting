@@ -102,7 +102,7 @@ fn radix_sort_a(
         let dist_bits = bitcast<u32>(dist2);
         let key_distance = 0xFFFFFFFFu - dist_bits;
         if (in_frustum(clip_space_pos.xyz)) {
-            key = key_distance;
+            key = (key_distance & 0xFFFFFF00u) | (entry_index & 0xFFu);
         }
         input_entries[entry_index].key = key;
         input_entries[entry_index].value = entry_index;
@@ -173,14 +173,11 @@ fn radix_sort_c_count_tiles(
     }
 }
 
-@compute @workgroup_size(1)
+@compute @workgroup_size(#{RADIX_BASE})
 fn radix_sort_c_scan_tiles(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
-    let digit = global_id.y;
-    if (digit >= #{RADIX_BASE}u) {
-        return;
-    }
+    let digit = local_id.x;
 
     let tile_size = #{WORKGROUP_ENTRIES_C}u;
     let tile_count = (gaussian_uniforms.count + tile_size - 1u) / tile_size;

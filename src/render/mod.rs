@@ -357,17 +357,13 @@ fn queue_gaussians<R: PlanarSync>(
     )>,
     gaussian_splatting_bundles: Query<GpuCloudBundleQuery<R>>,
 ) {
-    debug!("queue_gaussians");
-
     let warmup = views.iter().any(|(_, camera, _, _)| camera.warmup);
     if warmup {
-        debug!("skipping gaussian cloud render during warmup");
         return;
     }
 
     // TODO: condition this system based on CloudBindGroup attachment
     if gaussian_cloud_uniform.buffer().is_none() {
-        debug!("uniform buffer not initialized");
         return;
     };
 
@@ -376,31 +372,24 @@ fn queue_gaussians<R: PlanarSync>(
         .id::<DrawGaussians<R>>();
 
     for (view, _, visible_entities, msaa) in &mut views {
-        debug!("queue gaussians view");
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
         else {
-            debug!("transparent phase not found");
             continue;
         };
 
-        debug!("visible entities...");
         for (render_entity, visible_entity) in visible_entities.iter::<CloudVisibilityClass>() {
             if gaussian_splatting_bundles.get(*render_entity).is_err() {
-                debug!("gaussian splatting bundle not found");
                 continue;
             }
 
             let (_entity, cloud_handle, aabb, sorted_entries_handle, settings, transform) =
                 gaussian_splatting_bundles.get(*render_entity).unwrap();
 
-            debug!("queue gaussians clouds");
             if gaussian_clouds.get(cloud_handle.handle()).is_none() {
-                debug!("gaussian cloud asset not found");
                 return;
             }
 
             if sorted_entries.get(sorted_entries_handle).is_none() {
-                debug!("sorted entries asset not found");
                 return;
             }
 
@@ -1035,22 +1024,17 @@ pub fn extract_gaussians<R: PlanarSync>(
     for (entity, visibility, cloud_handle, aabb, sorted_entries, settings, transform) in
         gaussians_query.iter()
     {
-        debug!("extracting gaussian cloud entity: {:?}", entity);
-
         if !visibility.get() {
-            debug!("gaussian cloud not visible");
             continue;
         }
 
         if let Some(load_state) = asset_server.get_load_state(cloud_handle.handle())
             && load_state.is_loading()
         {
-            debug!("gaussian cloud asset loading");
             continue;
         }
 
         if gaussian_cloud_res.get(cloud_handle.handle()).is_none() {
-            debug!("gaussian cloud asset not found");
             continue;
         }
 
@@ -1192,24 +1176,20 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
         if let Some(load_state) = asset_server.get_load_state(cloud_handle.handle())
             && load_state.is_loading()
         {
-            debug!("queue gaussian bind group: cloud asset loading");
             continue;
         }
 
         if gaussian_cloud_res.get(cloud_handle.handle()).is_none() {
-            debug!("queue gaussian bind group: cloud asset not found");
             continue;
         }
 
         if let Some(load_state) = asset_server.get_load_state(&sorted_entries_handle.0)
             && load_state.is_loading()
         {
-            debug!("queue gaussian bind group: sorted entries asset loading");
             continue;
         }
 
         if sorted_entries_res.get(&sorted_entries_handle.0).is_none() {
-            debug!("queue gaussian bind group: sorted entries asset not found");
             continue;
         }
 
@@ -1245,8 +1225,6 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
                 ),
             }],
         );
-
-        debug!("inserting sorted bind group");
 
         commands
             .entity(entity)
@@ -1312,7 +1290,7 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
 
         let layout = &gaussian_cloud_pipeline.view_layout;
 
-        let entries = vec![
+        let entries: [BindGroupEntry; 4] = [
             BindGroupEntry {
                 binding: 0,
                 resource: view_binding.clone(),
@@ -1333,8 +1311,6 @@ pub fn queue_gaussian_view_bind_groups<R: PlanarSync>(
 
         let view_bind_group =
             render_device.create_bind_group("gaussian_view_bind_group", layout, &entries);
-
-        debug!("inserting gaussian view bind group");
 
         commands.entity(entity).insert(GaussianViewBindGroup {
             value: view_bind_group,
@@ -1390,7 +1366,7 @@ pub fn queue_gaussian_compute_view_bind_groups<R: PlanarSync>(
 
         let layout = &gaussian_cloud_pipeline.compute_view_layout;
 
-        let entries = vec![
+        let entries: [BindGroupEntry; 4] = [
             BindGroupEntry {
                 binding: 0,
                 resource: view_binding.clone(),
@@ -1451,8 +1427,6 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetViewBindGroup<I> {
         let dynamic_offsets = [view_uniform.offset, previous_offset];
         pass.set_bind_group(I, &gaussian_view_bind_group.value, &dynamic_offsets);
 
-        debug!("set view bind group");
-
         RenderCommandResult::Success
     }
 }
@@ -1498,8 +1472,6 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetPreviousViewBindGroup
             ),
         }
 
-        debug!("set previous view bind group");
-
         RenderCommandResult::Success
     }
 }
@@ -1527,14 +1499,11 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetGaussianUniformBindGr
         let mut set_bind_group = |indices: &[u32]| pass.set_bind_group(I, bind_group, indices);
 
         if gaussian_cloud_index.is_none() {
-            debug!("skipping gaussian uniform bind group\n");
             return RenderCommandResult::Skip;
         }
 
         let gaussian_cloud_index = gaussian_cloud_index.unwrap().index();
         set_bind_group(&[gaussian_cloud_index]);
-
-        debug!("set gaussian uniform bind group");
 
         RenderCommandResult::Success
     }
@@ -1578,8 +1547,6 @@ where
         gaussian_clouds: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        debug!("render call");
-
         #[cfg(all(feature = "buffer_texture", not(feature = "buffer_storage")))]
         let _ = view;
 
@@ -1589,12 +1556,9 @@ where
         let gpu_gaussian_cloud = match gaussian_clouds.into_inner().get(handle.handle()) {
             Some(gpu_gaussian_cloud) => gpu_gaussian_cloud,
             None => {
-                debug!("gpu cloud not found");
                 return RenderCommandResult::Skip;
             }
         };
-
-        debug!("drawing indirect");
 
         pass.set_bind_group(2, &planar_bind_groups.bind_group, &[]);
 

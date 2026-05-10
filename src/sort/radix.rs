@@ -91,7 +91,6 @@ where
         }
 
         if app.is_plugin_added::<SortPluginFlag>() {
-            debug!("sort plugin already added");
             return;
         }
 
@@ -221,7 +220,7 @@ impl GpuRadixBuffers {
         let sorting_pass_buffers = (0..4)
             .map(|idx| {
                 render_device.create_buffer_with_data(&BufferInitDescriptor {
-                    label: format!("sorting pass buffer {idx}").as_str().into(),
+                    label: Some("sorting pass buffer"),
                     contents: &[idx as u8, 0, 0, 0],
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 })
@@ -555,7 +554,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                     };
 
                     let group = render_device.create_bind_group(
-                        format!("radix_sort_bind_group pass={pass_idx} parity={parity}").as_str(),
+                        "radix_sort_bind_group",
                         &radix_pipeline.radix_sort_layout,
                         &[
                             // sorting_pass_index (u32) == pass_idx regardless of parity
@@ -730,7 +729,6 @@ where
                     let command_encoder = render_context.command_encoder();
                     let shader_defines = ShaderDefines::default();
                     let radix_digit_places = shader_defines.radix_digit_places;
-                    let radix_base = shader_defines.radix_base;
                     let workgroup_entries_a = shader_defines.workgroup_entries_a;
                     let workgroup_entries_c = shader_defines.workgroup_entries_c;
                     let tile_workgroups = dispatch_n.div_ceil(workgroup_entries_c);
@@ -828,7 +826,7 @@ where
                             pass.dispatch_workgroups(1, tile_workgroups, 1);
 
                             pass.set_pipeline(radix_sort_c_scan);
-                            pass.dispatch_workgroups(1, radix_base, 1);
+                            pass.dispatch_workgroups(1, 1, 1);
 
                             pass.set_pipeline(radix_sort_c_scatter);
                             pass.dispatch_workgroups(1, tile_workgroups, 1);
