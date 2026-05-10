@@ -514,6 +514,8 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
 
         // Use the pre-computed aligned stride from GpuSortedEntry (handles device alignment + padding).
         let aligned_camera_stride = gpu_sorted.aligned_camera_stride;
+        // Bind size for dynamic-offset entries must be aligned to avoid validation errors.
+        let bind_size = aligned_camera_stride as u64;
 
         let sorting_global_entry = BindGroupEntry {
             binding: 1,
@@ -574,26 +576,20 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                             sorting_global_entry.clone(),
                             sorting_status_counters_entry.clone(),
                             draw_indirect_entry.clone(),
-                            // input_entries
                             BindGroupEntry {
                                 binding: 4,
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: input_buf,
                                     offset: 0,
-                                    size: BufferSize::new(
-                                        (cloud.len() * std::mem::size_of::<SortEntry>()) as u64,
-                                    ),
+                                    size: BufferSize::new(bind_size),
                                 }),
                             },
-                            // output_entries
                             BindGroupEntry {
                                 binding: 5,
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: output_buf,
                                     offset: 0,
-                                    size: BufferSize::new(
-                                        (cloud.len() * std::mem::size_of::<SortEntry>()) as u64,
-                                    ),
+                                    size: BufferSize::new(bind_size),
                                 }),
                             },
                         ],

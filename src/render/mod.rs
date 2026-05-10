@@ -1209,7 +1209,8 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
                 resource: BindingResource::Buffer(BufferBinding {
                     buffer: &sorted_entries.sorted_entry_buffer,
                     offset: 0,
-                    size: BufferSize::new((cloud.len() * std::mem::size_of::<SortEntry>()) as u64),
+                    // Use the aligned stride so dynamic offsets for any camera_index stay valid.
+                    size: BufferSize::new(sorted_entries.aligned_camera_stride as u64),
                 }),
             }],
         );
