@@ -464,9 +464,35 @@ impl RenderAsset for GpuSortedEntry {
         render_device: &mut SystemParamItem<Self::Param>,
         _: Option<&Self>,
     ) -> Result<Self, PrepareAssetError<Self::SourceAsset>> {
+        let entry_size = std::mem::size_of::<SortEntry>() as u64;
+        let logical_bytes_per_cam = source.entry_count as u64 * entry_size;
+        let alignment = render_device
+            .limits()
+            .min_storage_buffer_offset_alignment as u64;
+        let aligned_bytes_per_cam = if alignment > 0 {
+            ((logical_bytes_per_cam + alignment - 1) / alignment) * alignment
+        } else {
+            logical_bytes_per_cam
+        };
+
+        let camera_count = source.camera_count as u64;
+        let total_size = camera_count * aligned_bytes_per_cam;
+
+        // Build padded contents so each camera chunk starts at an aligned offset.
+        let mut padded: Vec<u8> = vec![0u8; total_size as usize];
+        for cam in 0..source.camera_count {
+            let logical_start = cam * source.entry_count;
+            let logical_end = logical_start + source.entry_count;
+            let src = &source.sorted[logical_start..logical_end];
+            let dst_offset = cam as u64 * aligned_bytes_per_cam;
+            let src_bytes = bytemuck::cast_slice::<_, u8>(src);
+            padded[dst_offset as usize..dst_offset as usize + src_bytes.len()]
+                .copy_from_slice(src_bytes);
+        }
+
         let sorted_entry_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("sorted_entry_buffer"),
-            contents: bytemuck::cast_slice(source.sorted.as_slice()),
+            contents: &padded,
             usage: BufferUsages::COPY_SRC | BufferUsages::COPY_DST | BufferUsages::STORAGE,
         });
 
@@ -475,6 +501,7 @@ impl RenderAsset for GpuSortedEntry {
         Ok(GpuSortedEntry {
             sorted_entry_buffer,
             count,
+            aligned_camera_stride: aligned_bytes_per_cam as u32,
 
             #[cfg(feature = "buffer_texture")]
             texture: source.texture,
@@ -492,6 +519,9 @@ impl RenderAsset for GpuSortedEntry {
 pub struct GpuSortedEntry {
     pub sorted_entry_buffer: Buffer,
     pub count: usize,
+    /// Byte stride between camera chunks in the buffer (aligned to device min_storage_buffer_offset_alignment).
+    /// Dynamic offset for camera N is `N * aligned_camera_stride`.
+    pub aligned_camera_stride: u32,
 
     #[cfg(feature = "buffer_texture")]
     pub texture: Handle<Image>,

@@ -445,6 +445,8 @@ pub struct RadixBindGroup {
     pub radix_sort_bind_groups: [BindGroup; 8],
     /// Matches `CloudUniform.count` for this entity (min of len and `splat_render_budget`).
     pub dispatch_splat_count: u32,
+    /// Byte stride between per-camera chunks (aligned). Dynamic offset = camera_index * stride.
+    pub aligned_camera_stride: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -500,7 +502,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
         }
 
         let cloud = gaussian_cloud_res.get(cloud_handle.handle()).unwrap();
-        let sorted_entries = sorted_entries_res.get(sorted_entries_handle).unwrap();
+        let gpu_sorted = sorted_entries_res.get(sorted_entries_handle).unwrap();
         let sorting_assets = &sort_buffers.asset_map[&cloud_handle.handle().id()];
 
         let total = cloud.len() as u32;
@@ -509,6 +511,9 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
         } else {
             total
         };
+
+        // Use the pre-computed aligned stride from GpuSortedEntry (handles device alignment + padding).
+        let aligned_camera_stride = gpu_sorted.aligned_camera_stride;
 
         let sorting_global_entry = BindGroupEntry {
             binding: 1,
@@ -543,13 +548,13 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                 for parity in 0..=1 {
                     let (input_buf, output_buf) = if parity == 0 {
                         (
-                            &sorted_entries.sorted_entry_buffer,
+                            &gpu_sorted.sorted_entry_buffer,
                             &sorting_assets.entry_buffer_b,
                         )
                     } else {
                         (
                             &sorting_assets.entry_buffer_b,
-                            &sorted_entries.sorted_entry_buffer,
+                            &gpu_sorted.sorted_entry_buffer,
                         )
                     };
 
@@ -602,6 +607,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
         commands.entity(entity).insert(RadixBindGroup {
             radix_sort_bind_groups,
             dispatch_splat_count,
+            aligned_camera_stride,
         });
     }
 }
@@ -721,9 +727,8 @@ where
                     continue;
                 }
 
-                let chunk_byte_size =
-                    dispatch_n as u64 * std::mem::size_of::<SortEntry>() as u64;
-                let cam_offset = sort_trigger.camera_index as u64 * chunk_byte_size;
+                let cam_offset =
+                    sort_trigger.camera_index as u64 * radix_bind_group.aligned_camera_stride as u64;
 
                 {
                     let command_encoder = render_context.command_encoder();

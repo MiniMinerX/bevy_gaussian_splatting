@@ -1118,6 +1118,8 @@ pub struct GaussianUniformBindGroups {
 #[derive(Component)]
 pub struct SortBindGroup {
     pub sorted_bind_group: BindGroup,
+    /// Byte stride for per-camera chunks (aligned). Used for dynamic offset in draw.
+    pub aligned_camera_stride: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1228,7 +1230,10 @@ fn queue_gaussian_bind_group<R: PlanarSync>(
 
         commands
             .entity(entity)
-            .insert(SortBindGroup { sorted_bind_group });
+            .insert(SortBindGroup {
+                sorted_bind_group,
+                aligned_camera_stride: sorted_entries.aligned_camera_stride,
+            });
     }
 }
 
@@ -1564,13 +1569,10 @@ where
 
         #[cfg(feature = "buffer_storage")]
         {
-            // TODO: align dynamic offset to `min_storage_buffer_offset_alignment`
             pass.set_bind_group(
                 3,
                 &sort_bind_groups.sorted_bind_group,
-                &[view.camera_index as u32
-                    * std::mem::size_of::<SortEntry>() as u32
-                    * gpu_gaussian_cloud.len() as u32],
+                &[view.camera_index as u32 * sort_bind_groups.aligned_camera_stride],
             );
         }
 
