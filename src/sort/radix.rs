@@ -512,10 +512,12 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
             total
         };
 
-        // Use the pre-computed aligned stride from GpuSortedEntry (handles device alignment + padding).
+        // Use the pre-computed aligned stride from GpuSortedEntry for the main sorted buffer.
         let aligned_camera_stride = gpu_sorted.aligned_camera_stride;
-        // Bind size for dynamic-offset entries must be aligned to avoid validation errors.
-        let bind_size = aligned_camera_stride as u64;
+        // Logical size of one camera's chunk (used for the temporary entry_buffer_b which
+        // only ever holds a single camera's worth of entries and has no padding).
+        let logical_chunk_size =
+            dispatch_splat_count as u64 * std::mem::size_of::<SortEntry>() as u64;
 
         let sorting_global_entry = BindGroupEntry {
             binding: 1,
@@ -548,15 +550,22 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
             let mut groups: Vec<BindGroup> = Vec::with_capacity(8);
             for pass_idx in 0..4 {
                 for parity in 0..=1 {
-                    let (input_buf, output_buf) = if parity == 0 {
+                    // Choose the correct bind size per buffer:
+                    // - main sorted buffer needs the aligned stride (so dynamic offsets stay valid)
+                    // - entry_buffer_b only holds one logical camera chunk (no padding)
+                    let (input_buf, input_size, output_buf, output_size) = if parity == 0 {
                         (
                             &gpu_sorted.sorted_entry_buffer,
+                            aligned_camera_stride as u64,
                             &sorting_assets.entry_buffer_b,
+                            logical_chunk_size,
                         )
                     } else {
                         (
                             &sorting_assets.entry_buffer_b,
+                            logical_chunk_size,
                             &gpu_sorted.sorted_entry_buffer,
+                            aligned_camera_stride as u64,
                         )
                     };
 
@@ -581,7 +590,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: input_buf,
                                     offset: 0,
-                                    size: BufferSize::new(bind_size),
+                                    size: BufferSize::new(input_size),
                                 }),
                             },
                             BindGroupEntry {
@@ -589,7 +598,7 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: output_buf,
                                     offset: 0,
-                                    size: BufferSize::new(bind_size),
+                                    size: BufferSize::new(output_size),
                                 }),
                             },
                         ],
