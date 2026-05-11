@@ -318,7 +318,7 @@ impl<R: PlanarSync> FromWorld for RadixSortPipeline<R> {
                 visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
+                    has_dynamic_offset: false,
                     min_binding_size: BufferSize::new(std::mem::size_of::<u32>() as u64),
                 },
                 count: None,
