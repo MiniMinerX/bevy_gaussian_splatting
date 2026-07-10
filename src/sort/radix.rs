@@ -451,6 +451,7 @@ pub struct RadixBindGroup {
     pub radix_sort_bind_groups: [BindGroup; 8],
 }
 
+#[allow(type_alias_bounds)]
 type RadixCloudQueryItem<R: PlanarSync> = (
     &'static <R as PlanarSync>::PlanarTypeHandle,
     &'static PlanarStorageBindGroup<R>,

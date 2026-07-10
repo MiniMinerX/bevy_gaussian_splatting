@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use crate::{
     CloudSettings,
     camera::GaussianCamera,
-    gaussian::{interface::CommonCloud, plane_cut::GaussianPlaneCut},
+    gaussian::interface::CommonCloud,
     sort::{SortConfig, SortMode, SortTrigger, SortedEntries, SortedEntriesHandle},
 };
 
@@ -32,7 +32,6 @@ pub fn rayon_sort<R: PlanarSync>(
         &SortedEntriesHandle,
         &CloudSettings,
         &GlobalTransform,
-        Option<&GaussianPlaneCut>,
     )>,
     mut sorted_entries_res: ResMut<Assets<SortedEntries>>,
     mut cameras: Query<&mut SortTrigger, With<GaussianCamera>>,
@@ -54,7 +53,7 @@ pub fn rayon_sort<R: PlanarSync>(
         let mut pending_assets = false;
         let mut sorted_any = false;
 
-        for (gaussian_cloud_handle, sorted_entries_handle, settings, transform, plane_cut) in
+        for (gaussian_cloud_handle, sorted_entries_handle, settings, transform) in
             gaussian_clouds.iter()
         {
             if settings.sort_mode != SortMode::Rayon {
@@ -83,7 +82,6 @@ pub fn rayon_sort<R: PlanarSync>(
                 let gaussians = gaussian_cloud.len();
                 let mut chunks = sorted_entries.sorted.chunks_mut(gaussians);
                 let chunk = chunks.nth(trigger.camera_index).unwrap();
-                let plane_cut = plane_cut.copied().unwrap_or_default();
 
                 gaussian_cloud
                     .position_par_iter()
@@ -92,12 +90,6 @@ pub fn rayon_sort<R: PlanarSync>(
                     .for_each(|(idx, (position, sort_entry))| {
                         let position = Vec3A::from_slice(position.as_ref());
                         let position = transform.affine().transform_point3a(position);
-
-                        if plane_cut.discards(Vec3::from(position)) {
-                            sort_entry.key = u32::MAX;
-                            sort_entry.index = idx as u32;
-                            return;
-                        }
 
                         let delta = trigger.last_camera_position - position;
 

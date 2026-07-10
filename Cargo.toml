@@ -57,8 +57,6 @@ default = [
   # "morph_particles",
   "morph_interpolate",
 
-  "nightly_generic_alias",
-
   "sort_bitonic",
   "sort_radix",
   "sort_rayon",
@@ -81,8 +79,6 @@ material_noise = ["noise", "dep:noise"]
 
 morph_particles = []
 morph_interpolate = []
-
-nightly_generic_alias = []
 
 noise = []
 
@@ -300,6 +296,11 @@ required-features = ["headless"]
 [[example]]
 name = "multi_camera"
 path = "examples/multi_camera.rs"
+required-features = ["viewer"]
+
+[[example]]
+name = "gauss_cut"
+path = "examples/gauss_cut.rs"
 required-features = ["viewer"]
 
 

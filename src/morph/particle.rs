@@ -263,6 +263,7 @@ type ParticleBehaviorViewQueryItem = (
     &'static ViewUniformOffset,
 );
 
+#[allow(type_alias_bounds)]
 type ParticleBehaviorCloudQueryItem<R: PlanarSync> = (
     &'static PlanarStorageBindGroup<R>,
     &'static ParticleBehaviorsHandle,

@@ -15,6 +15,7 @@
 }
 #import bevy_gaussian_splatting::transform::{
     world_to_clip,
+    ndc_offset_to_world,
     in_frustum,
     discarded_by_plane_cut,
 }
@@ -129,18 +130,19 @@
         @builtin(position) position: vec4<f32>,
         @location(0) color: vec4<f32>,
         @location(1) uv: vec2<f32>,
+        @location(2) world_position: vec3<f32>,
     #ifdef GAUSSIAN_2D
-        @location(2) local_to_pixel_u: vec3<f32>,
-        @location(3) local_to_pixel_v: vec3<f32>,
-        @location(4) local_to_pixel_w: vec3<f32>,
-        @location(5) mean_2d: vec2<f32>,
-        @location(6) radius: vec2<f32>,
+        @location(3) local_to_pixel_u: vec3<f32>,
+        @location(4) local_to_pixel_v: vec3<f32>,
+        @location(5) local_to_pixel_w: vec3<f32>,
+        @location(6) mean_2d: vec2<f32>,
+        @location(7) radius: vec2<f32>,
     #else #ifdef GAUSSIAN_3D
-        @location(2) conic: vec3<f32>,
-        @location(3) major_minor: vec2<f32>,
+        @location(3) conic: vec3<f32>,
+        @location(4) major_minor: vec2<f32>,
     #else #ifdef GAUSSIAN_4D
-        @location(2) conic: vec3<f32>,
-        @location(3) major_minor: vec2<f32>,
+        @location(3) conic: vec3<f32>,
+        @location(4) major_minor: vec2<f32>,
     #endif
     };
 #else
@@ -148,18 +150,19 @@
         @builtin(position) position: vec4<f32>,
         @location(0) @interpolate(flat) color: vec4<f32>,
         @location(1) @interpolate(linear) uv: vec2<f32>,
+        @location(2) @interpolate(linear) world_position: vec3<f32>,
     #ifdef GAUSSIAN_2D
-        @location(2) @interpolate(flat) local_to_pixel_u: vec3<f32>,
-        @location(3) @interpolate(flat) local_to_pixel_v: vec3<f32>,
-        @location(4) @interpolate(flat) local_to_pixel_w: vec3<f32>,
-        @location(5) @interpolate(flat) mean_2d: vec2<f32>,
-        @location(6) @interpolate(flat) radius: vec2<f32>,
+        @location(3) @interpolate(flat) local_to_pixel_u: vec3<f32>,
+        @location(4) @interpolate(flat) local_to_pixel_v: vec3<f32>,
+        @location(5) @interpolate(flat) local_to_pixel_w: vec3<f32>,
+        @location(6) @interpolate(flat) mean_2d: vec2<f32>,
+        @location(7) @interpolate(flat) radius: vec2<f32>,
     #else ifdef GAUSSIAN_3D
-        @location(2) @interpolate(flat) conic: vec3<f32>,
-        @location(3) @interpolate(linear) major_minor: vec2<f32>,
+        @location(3) @interpolate(flat) conic: vec3<f32>,
+        @location(4) @interpolate(linear) major_minor: vec2<f32>,
     #else ifdef GAUSSIAN_4D
-        @location(2) @interpolate(flat) conic: vec3<f32>,
-        @location(3) @interpolate(linear) major_minor: vec2<f32>,
+        @location(3) @interpolate(flat) conic: vec3<f32>,
+        @location(4) @interpolate(linear) major_minor: vec2<f32>,
     #endif
     };
 #endif
@@ -205,8 +208,6 @@ fn vs_points(
     discard_quad |= get_visibility(splat_index) < 0.5;
 #endif
 
-    discard_quad |= discarded_by_plane_cut(transformed_position);
-
 #ifdef GAUSSIAN_4D
 #else
     let projected_position = world_to_clip(transformed_position);
@@ -216,6 +217,7 @@ fn vs_points(
     if (discard_quad) {
         output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        output.world_position = transformed_position;
         return output;
     }
 
@@ -271,6 +273,7 @@ fn vs_points(
         if !gaussian_4d.mask {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            output.world_position = transformed_position;
             return output;
         }
 
@@ -279,9 +282,10 @@ fn vs_points(
         // TODO: set previous_transformed_position based on temporal position delta
         let projected_position = world_to_clip(transformed_position);
 
-        if discarded_by_plane_cut(transformed_position) || !in_frustum(projected_position.xyz) {
+        if !in_frustum(projected_position.xyz) {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            output.world_position = transformed_position;
             return output;
         }
 
@@ -434,12 +438,17 @@ fn vs_points(
         projected_position.xy + bb.xy,
         projected_position.zw,
     );
+    output.world_position = ndc_offset_to_world(transformed_position, bb.xy);
 
     return output;
 }
 
 @fragment
 fn fs_main(input: GaussianVertexOutput) -> @location(0) vec4<f32> {
+    if discarded_by_plane_cut(input.world_position) {
+        discard;
+    }
+
 #ifdef USE_AABB
 #ifdef GAUSSIAN_2D
     let radius = input.radius;

@@ -3,6 +3,9 @@
 //! Spawn a cutter as a child of a cloud (or target it with [`CutsGaussianCloud`]) and animate
 //! its [`Transform`]. The cutter's world pose becomes the clip plane each frame.
 //!
+//! Clipping is applied per-fragment in the splat shader (not just gaussian centers), so
+//! billboards straddling the plane are sliced cleanly.
+//!
 //! ```ignore
 //! commands.entity(cloud).with_children(|c| {
 //!     c.spawn((
@@ -109,7 +112,7 @@ impl GaussianPlaneCut {
     /// Pack into cloud uniform fields: `plane_point.w` = enabled, `plane_normal.w` = ±1 keep side.
     pub fn to_uniform_fields(self) -> (Vec4, Vec4) {
         if !self.enabled {
-            return (Vec4::ZERO, Vec4::Y.extend(1.0));
+            return (Vec4::ZERO, Vec3::Y.extend(1.0));
         }
         let keep = if self.keep_positive_side { 1.0 } else { -1.0 };
         (

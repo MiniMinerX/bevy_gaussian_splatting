@@ -13,12 +13,10 @@ bevy gaussian splatting render pipeline plugin. view the [live demo gallery](htt
 ## install
 
 ```bash
-cargo +nightly install bevy_gaussian_splatting
+cargo install bevy_gaussian_splatting
 bevy_gaussian_splatting --input-cloud [file://gaussian.ply | https://mitchell.mosure.me/go_trimmed.ply]
 bevy_gaussian_splatting --input-scene [file://scene.glb | https://mitchell.mosure.me/trellis.glb]
 ```
-
-> note: default bevy_gaussian_splatting features require nightly rust for generic associated types. to use on stable, disable default features and `nightly_generic_alias` feature
 
 ## viewer hotkeys
 
