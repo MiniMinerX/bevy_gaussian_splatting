@@ -7,6 +7,7 @@ pub mod f32;
 pub mod formats;
 pub mod interface;
 pub mod iter;
+pub mod plane_cut;
 pub mod settings;
 
 assert_cfg!(

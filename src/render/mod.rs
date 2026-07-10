@@ -45,6 +45,7 @@ use crate::{
     gaussian::{
         cloud::CloudVisibilityClass,
         interface::CommonCloud,
+        plane_cut::GaussianPlaneCut,
         settings::{
             CloudSettings, DrawMode, GaussianColorSpace, GaussianMode, RadixSortDepthBits,
             RasterizeMode,
@@ -1006,6 +1007,10 @@ pub struct CloudUniform {
     pub color_space: u32,
     pub min: Vec4,
     pub max: Vec4,
+    /// xyz = world plane point, w = enabled (0/1)
+    pub plane_point: Vec4,
+    /// xyz = world plane normal, w = keep side (+1 / -1)
+    pub plane_normal: Vec4,
 }
 
 #[allow(clippy::type_complexity)]
@@ -1023,13 +1028,14 @@ pub fn extract_gaussians<R: PlanarSync>(
             &SortedEntriesHandle,
             &CloudSettings,
             &GlobalTransform,
+            Option<&GaussianPlaneCut>,
         )>,
     >,
 ) {
     let mut commands_list = Vec::with_capacity(*prev_commands_len);
     // let visible_gaussians = gaussians_query.iter().filter(|(_, vis, ..)| vis.is_visible());
 
-    for (entity, visibility, cloud_handle, aabb, sorted_entries, settings, transform) in
+    for (entity, visibility, cloud_handle, aabb, sorted_entries, settings, transform, plane_cut) in
         gaussians_query.iter()
     {
         debug!("extracting gaussian cloud entity: {:?}", entity);
@@ -1053,6 +1059,11 @@ pub fn extract_gaussians<R: PlanarSync>(
 
         let cloud = gaussian_cloud_res.get(cloud_handle.handle()).unwrap();
 
+        let (plane_point, plane_normal) = plane_cut
+            .copied()
+            .unwrap_or_default()
+            .to_uniform_fields();
+
         let settings_uniform = CloudUniform {
             transform: transform.to_matrix(),
             global_opacity: settings.global_opacity,
@@ -1069,6 +1080,8 @@ pub fn extract_gaussians<R: PlanarSync>(
             },
             min: aabb.min().extend(1.0),
             max: aabb.max().extend(1.0),
+            plane_point,
+            plane_normal,
         };
 
         commands_list.push((

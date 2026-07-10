@@ -23,6 +23,10 @@ struct GaussianUniforms {
     color_space: u32,
     min: vec4<f32>,
     max: vec4<f32>,
+    // xyz = world plane point, w = enabled (0/1)
+    plane_point: vec4<f32>,
+    // xyz = world plane normal, w = keep side (+1 keep positive half-space, -1 keep negative)
+    plane_normal: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> gaussian_uniforms: GaussianUniforms;
 

@@ -16,6 +16,7 @@
 #import bevy_gaussian_splatting::transform::{
     world_to_clip,
     in_frustum,
+    discarded_by_plane_cut,
 }
 
 #ifdef GAUSSIAN_2D
@@ -204,6 +205,8 @@ fn vs_points(
     discard_quad |= get_visibility(splat_index) < 0.5;
 #endif
 
+    discard_quad |= discarded_by_plane_cut(transformed_position);
+
 #ifdef GAUSSIAN_4D
 #else
     let projected_position = world_to_clip(transformed_position);
@@ -276,7 +279,7 @@ fn vs_points(
         // TODO: set previous_transformed_position based on temporal position delta
         let projected_position = world_to_clip(transformed_position);
 
-        if !in_frustum(projected_position.xyz) {
+        if discarded_by_plane_cut(transformed_position) || !in_frustum(projected_position.xyz) {
             output.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             output.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
             return output;

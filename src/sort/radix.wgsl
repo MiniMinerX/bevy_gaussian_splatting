@@ -15,6 +15,7 @@
 #import bevy_gaussian_splatting::transform::{
     world_to_clip,
     in_frustum,
+    discarded_by_plane_cut,
 }
 
 #ifdef PACKED_F32
@@ -93,7 +94,7 @@ fn radix_sort_a(
         let dist2 = dot(diff, diff);
         let dist_bits = bitcast<u32>(dist2);
         let key_distance = 0xFFFFFFFFu - dist_bits;
-        if (in_frustum(clip_space_pos.xyz)) {
+        if (in_frustum(clip_space_pos.xyz) && !discarded_by_plane_cut(transformed_position)) {
             key = key_distance;
         }
         key = key >> #{RADIX_KEY_SHIFT}u;

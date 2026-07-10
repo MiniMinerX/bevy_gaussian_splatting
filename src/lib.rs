@@ -17,6 +17,10 @@ pub use gaussian::{
             random_gaussians_4d_seeded,
         },
     },
+    plane_cut::{
+        CutsGaussianCloud, GaussianPlaneCut, GaussianPlaneCutters, GaussianPlaneCutter,
+        PlaneCutPlugin, PlaneNormalAxis,
+    },
     settings::{CloudSettings, GaussianMode, RadixSortDepthBits, RasterizeMode},
 };
 
@@ -57,6 +61,7 @@ impl Plugin for GaussianSplattingPlugin {
         app.add_plugins((
             camera::GaussianCameraPlugin,
             gaussian::settings::SettingsPlugin,
+            gaussian::plane_cut::PlaneCutPlugin,
             gaussian::cloud::CloudPlugin::<Gaussian3d>::default(),
             gaussian::cloud::CloudPlugin::<Gaussian4d>::default(),
         ));
