@@ -2,6 +2,8 @@ debug/
 target/
 vendor/
 out/
+assets/
+backups/
 **/*.rs.bk
 *.pdb
 

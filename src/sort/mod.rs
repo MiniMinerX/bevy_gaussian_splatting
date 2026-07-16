@@ -129,11 +129,20 @@ where
         app.register_asset_reflect::<SortedEntries>();
 
         app.register_type::<SortTrigger>();
+        app.register_type::<ShareSort>();
         app.add_plugins(ExtractComponentPlugin::<SortTrigger>::default());
+        app.add_plugins(ExtractComponentPlugin::<ShareSort>::default());
 
         app.add_plugins(RenderAssetPlugin::<GpuSortedEntry>::default());
 
-        app.add_systems(Update, (update_sort_trigger, update_sorted_entries_sizes));
+        app.add_systems(
+            Update,
+            (
+                update_sort_trigger,
+                apply_share_sort.after(update_sort_trigger),
+                update_sorted_entries_sizes,
+            ),
+        );
 
         #[cfg(feature = "buffer_texture")]
         app.add_systems(PostUpdate, update_textures_on_change);
@@ -149,11 +158,27 @@ pub struct SortTrigger {
     pub last_sort_time: Option<Instant>,
 }
 
+/// Attach to a camera to reuse another camera's sort order instead of sorting independently.
+///
+/// Useful for XR where multiple cameras share nearly identical viewpoints
+/// (left/right eye, or a PC mirror of an XR view). Sharing avoids redundant
+/// sort passes and keeps stereo eyes on the same depth order.
+///
+/// `sort_cam` must be a [`GaussianCamera`] that does **not** have `ShareSort`.
+#[derive(Component, ExtractComponent, Debug, Clone, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct ShareSort {
+    pub sort_cam: Entity,
+}
+
 #[allow(clippy::type_complexity)]
 fn update_sort_trigger(
     mut commands: Commands,
     new_gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>, Without<SortTrigger>)>,
-    mut existing_sort_triggers: Query<(&GlobalTransform, &Camera, &mut SortTrigger)>,
+    mut existing_sort_triggers: Query<
+        (&GlobalTransform, &Camera, &mut SortTrigger),
+        Without<ShareSort>,
+    >,
     sort_config: Res<SortConfig>,
 ) {
     for entity in new_gaussian_cameras.iter() {
@@ -193,6 +218,19 @@ fn update_sort_trigger(
     }
 }
 
+/// Copies the source camera's `camera_index` onto sharing cameras and ensures they never trigger a sort.
+fn apply_share_sort(
+    mut share_cameras: Query<(&ShareSort, &mut SortTrigger)>,
+    source_cameras: Query<&SortTrigger, Without<ShareSort>>,
+) {
+    for (share_sort, mut trigger) in share_cameras.iter_mut() {
+        if let Ok(source_trigger) = source_cameras.get(share_sort.sort_cam) {
+            trigger.camera_index = source_trigger.camera_index;
+        }
+        trigger.needs_sort = false;
+    }
+}
+
 #[cfg(feature = "buffer_texture")]
 fn update_textures_on_change(
     mut images: ResMut<Assets<Image>>,
@@ -225,11 +263,13 @@ fn auto_insert_sorted_entries<R: PlanarSync>(
         (Entity, &R::PlanarTypeHandle, &CloudSettings),
         Without<SortedEntriesHandle>,
     >,
-    gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>)>,
+    gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>, Without<ShareSort>)>,
     #[cfg(feature = "buffer_texture")] mut images: ResMut<Assets<Image>>,
 ) where
     R::PlanarType: CommonCloud,
 {
+    // Only unique sort owners allocate buffer slots. ShareSort cameras reuse a
+    // source camera_index, so they must not inflate `camera_count`.
     let camera_count = gaussian_cameras.iter().len();
 
     if camera_count == 0 {
@@ -273,7 +313,7 @@ fn auto_insert_sorted_entries<R: PlanarSync>(
 fn update_sorted_entries_sizes(
     mut sorted_entries_res: ResMut<Assets<SortedEntries>>,
     sorted_entries: Query<&SortedEntriesHandle>,
-    gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>)>,
+    gaussian_cameras: Query<Entity, (With<Camera>, With<GaussianCamera>, Without<ShareSort>)>,
     #[cfg(feature = "buffer_texture")] mut images: ResMut<Assets<Image>>,
 ) {
     let camera_count: usize = gaussian_cameras.iter().len();
@@ -413,6 +453,8 @@ impl RenderAsset for GpuSortedEntry {
         Ok(GpuSortedEntry {
             sorted_entry_buffer,
             count,
+            camera_count: source.camera_count,
+            entry_count: source.entry_count,
 
             #[cfg(feature = "buffer_texture")]
             texture: source.texture,
@@ -430,6 +472,8 @@ impl RenderAsset for GpuSortedEntry {
 pub struct GpuSortedEntry {
     pub sorted_entry_buffer: Buffer,
     pub count: usize,
+    pub camera_count: usize,
+    pub entry_count: usize,
 
     #[cfg(feature = "buffer_texture")]
     pub texture: Handle<Image>,

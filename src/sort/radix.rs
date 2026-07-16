@@ -33,7 +33,10 @@ use crate::{
         CloudPipeline, CloudPipelineKey, CloudUniform, GaussianUniformBindGroups, ShaderDefines,
         shader_defs_with_defines,
     },
-    sort::{GpuSortedEntry, SortEntry, SortMode, SortPluginFlag, SortedEntriesHandle},
+    sort::{
+        GpuSortedEntry, ShareSort, SortEntry, SortMode, SortPluginFlag, SortTrigger,
+        SortedEntriesHandle,
+    },
 };
 
 assert_cfg!(
@@ -448,7 +451,10 @@ fn queue_radix_sort_pipeline_variant(
 pub struct RadixBindGroup {
     // For each digit pass idx in 0..RADIX_DIGIT_PLACES, we create 2 bind groups (parity 0/1):
     // index = pass_idx * 2 + parity (parity 0: input=sorted_entries, output=entry_buffer_b; parity 1: input=entry_buffer_b, output=sorted_entries)
-    pub radix_sort_bind_groups: [BindGroup; 8],
+    // Outer vec is per `SortTrigger.camera_index` — radix must write the same
+    // slice the draw pass reads (previously always used slot 0, so XR eyes at
+    // index ≥ 1 rendered unsorted / wrong depth order).
+    pub radix_sort_bind_groups: Vec<[BindGroup; 8]>,
 }
 
 #[allow(type_alias_bounds)]
@@ -462,6 +468,7 @@ type RadixCloudQueryItem<R: PlanarSync> = (
 
 type RadixViewQueryItem = (
     &'static GaussianCamera,
+    &'static SortTrigger,
     &'static crate::render::GaussianComputeViewBindGroup,
     &'static ViewUniformOffset,
     &'static PreviousViewUniformOffset,
@@ -553,27 +560,43 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
             }),
         };
 
-        let radix_sort_bind_groups: [BindGroup; 8] = {
+        let slice_bytes = (cloud.len() * std::mem::size_of::<SortEntry>()) as u64;
+        let camera_count = sorted_entries.camera_count.max(1);
+        // Draw/sort stride matches `cloud.len()` (same as the render dynamic offset).
+        let sorted_stride =
+            (cloud.len() * std::mem::size_of::<SortEntry>()) as u64;
+
+        let mut by_camera: Vec<[BindGroup; 8]> = Vec::with_capacity(camera_count);
+        for camera_index in 0..camera_count {
+            let sorted_offset = camera_index as u64 * sorted_stride;
             let mut groups: Vec<BindGroup> = Vec::with_capacity(8);
             for pass_idx in 0..4 {
                 for parity in 0..=1 {
-                    let (input_buf, output_buf) = if parity == 0 {
+                    // Scratch (`entry_buffer_b`) is always a single-camera buffer at offset 0.
+                    // The persistent sorted buffer is sliced per camera_index.
+                    let (input_buf, input_offset, output_buf, output_offset) = if parity == 0 {
                         (
                             &sorted_entries.sorted_entry_buffer,
+                            sorted_offset,
                             &sorting_assets.entry_buffer_b,
+                            0u64,
                         )
                     } else {
                         (
                             &sorting_assets.entry_buffer_b,
+                            0u64,
                             &sorted_entries.sorted_entry_buffer,
+                            sorted_offset,
                         )
                     };
 
                     let group = render_device.create_bind_group(
-                        format!("radix_sort_bind_group pass={pass_idx} parity={parity}").as_str(),
+                        format!(
+                            "radix_sort_bind_group cam={camera_index} pass={pass_idx} parity={parity}"
+                        )
+                        .as_str(),
                         &radix_pipeline.radix_sort_layout,
                         &[
-                            // sorting_pass_index (u32) == pass_idx regardless of parity
                             BindGroupEntry {
                                 binding: 0,
                                 resource: BindingResource::Buffer(BufferBinding {
@@ -585,26 +608,20 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                             sorting_global_entry.clone(),
                             sorting_status_counters_entry.clone(),
                             draw_indirect_entry.clone(),
-                            // input_entries
                             BindGroupEntry {
                                 binding: 4,
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: input_buf,
-                                    offset: 0,
-                                    size: BufferSize::new(
-                                        (cloud.len() * std::mem::size_of::<SortEntry>()) as u64,
-                                    ),
+                                    offset: input_offset,
+                                    size: BufferSize::new(slice_bytes),
                                 }),
                             },
-                            // output_entries
                             BindGroupEntry {
                                 binding: 5,
                                 resource: BindingResource::Buffer(BufferBinding {
                                     buffer: output_buf,
-                                    offset: 0,
-                                    size: BufferSize::new(
-                                        (cloud.len() * std::mem::size_of::<SortEntry>()) as u64,
-                                    ),
+                                    offset: output_offset,
+                                    size: BufferSize::new(slice_bytes),
                                 }),
                             },
                         ],
@@ -612,11 +629,11 @@ pub fn queue_radix_bind_group<R: PlanarSync>(
                     groups.push(group);
                 }
             }
-            groups.try_into().unwrap()
-        };
+            by_camera.push(groups.try_into().unwrap());
+        }
 
         commands.entity(entity).insert(RadixBindGroup {
-            radix_sort_bind_groups,
+            radix_sort_bind_groups: by_camera,
         });
     }
 }
@@ -629,13 +646,14 @@ fn run_radix_sort<R: PlanarSync>(
     gaussian_uniforms: Res<GaussianUniformBindGroups>,
     sort_buffers: Res<RadixSortBuffers<R>>,
     gpu_planars: Res<RenderAssets<R::GpuPlanarType>>,
-    view_bind_group: ViewQuery<RadixViewQueryItem>,
+    view_bind_group: ViewQuery<RadixViewQueryItem, Without<ShareSort>>,
     gaussian_clouds: Query<RadixCloudQueryItem<R>>,
 ) where
     R::GpuPlanarType: GpuPlanarStorage,
 {
-    let (_camera, view_bind_group, view_uniform_offset, previous_view_uniform_offset) =
+    let (_camera, sort_trigger, view_bind_group, view_uniform_offset, previous_view_uniform_offset) =
         view_bind_group.into_inner();
+    let camera_index = sort_trigger.camera_index;
 
     let Some(uniform_bind_group) = gaussian_uniforms.base_bind_group.as_ref() else {
         debug!("RadixSort run skipped: GaussianUniform base bind group missing");
@@ -659,6 +677,15 @@ fn run_radix_sort<R: PlanarSync>(
         if !pipeline_variant.is_loaded(&pipeline_cache) {
             continue;
         }
+
+        let Some(camera_bind_groups) = radix_bind_group.radix_sort_bind_groups.get(camera_index)
+        else {
+            debug!(
+                "RadixSort run skipped: no bind groups for camera_index={camera_index} (have {})",
+                radix_bind_group.radix_sort_bind_groups.len()
+            );
+            continue;
+        };
 
         let command_encoder = render_context.command_encoder();
         let shader_defines = pipeline_variant.shader_defines;
@@ -690,11 +717,7 @@ fn run_radix_sort<R: PlanarSync>(
             );
             pass.set_bind_group(1, uniform_bind_group, &[cloud_uniform_index.index()]);
             pass.set_bind_group(2, &cloud_bind_group.bind_group, &[]);
-            pass.set_bind_group(
-                3,
-                &radix_bind_group.radix_sort_bind_groups[initial_parity],
-                &[],
-            );
+            pass.set_bind_group(3, &camera_bind_groups[initial_parity], &[]);
             pass.dispatch_workgroups(1, 1, 1);
 
             let radix_sort_a = pipeline_cache
@@ -731,7 +754,7 @@ fn run_radix_sort<R: PlanarSync>(
             // Choose the initial parity so the final pass writes to sorted_entries.
             let parity = ((pass_idx as usize) + initial_parity) % 2;
             let bg_index = (pass_idx as usize) * 2 + parity;
-            pass.set_bind_group(3, &radix_bind_group.radix_sort_bind_groups[bg_index], &[]);
+            pass.set_bind_group(3, &camera_bind_groups[bg_index], &[]);
 
             let radix_sort_c_count = pipeline_cache
                 .get_compute_pipeline(pipeline_variant.radix_sort_pipelines[RADIX_PIPELINE_C_COUNT])

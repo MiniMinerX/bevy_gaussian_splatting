@@ -6,7 +6,7 @@ use crate::{
     CloudSettings,
     camera::GaussianCamera,
     gaussian::interface::CommonCloud,
-    sort::{SortConfig, SortMode, SortTrigger, SortedEntries, SortedEntriesHandle},
+    sort::{ShareSort, SortConfig, SortMode, SortTrigger, SortedEntries, SortedEntriesHandle},
 };
 
 #[derive(Default)]
@@ -34,7 +34,7 @@ pub fn rayon_sort<R: PlanarSync>(
         &GlobalTransform,
     )>,
     mut sorted_entries_res: ResMut<Assets<SortedEntries>>,
-    mut cameras: Query<&mut SortTrigger, With<GaussianCamera>>,
+    mut cameras: Query<&mut SortTrigger, (With<GaussianCamera>, Without<ShareSort>)>,
     mut sort_config: ResMut<SortConfig>,
 ) where
     R::PlanarType: CommonCloud,

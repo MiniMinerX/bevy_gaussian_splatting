@@ -28,6 +28,7 @@ pub use io::scene::{
 };
 
 pub use material::spherical_harmonics::SphericalHarmonicCoefficients;
+pub use sort::ShareSort;
 
 use io::IoPlugin;
 
